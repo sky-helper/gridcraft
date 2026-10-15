@@ -86,11 +86,12 @@ fn open_params(p: &Json, mut source: Json) -> Json {
 }
 
 /// `app.open`'s reply: the workbook's title, and how `file.open` opened it (`readOnly`,
-/// `lockReadOnly`, `recalculated`; for a file already open, `alreadyOpen` and what it ignored).
+/// `lockReadOnly`, `recalculated`, `calculatedWithoutResult`; for a file already open,
+/// `alreadyOpen` and what it ignored).
 fn opened(app: &SheetApp, r: &Json) -> Json {
     let mut reply = serde_json::Map::new();
     reply.insert("title".into(), json!(app.session.active().map(|d| d.display_title())));
-    for key in ["readOnly", "lockReadOnly", "recalculated", "alreadyOpen", "recalculateIgnored", "readOnlyIgnored"] {
+    for key in ["readOnly", "lockReadOnly", "recalculated", "calculatedWithoutResult", "alreadyOpen", "recalculateIgnored", "readOnlyIgnored"] {
         if let Some(v) = r.get(key) {
             reply.insert(key.into(), v.clone());
         }

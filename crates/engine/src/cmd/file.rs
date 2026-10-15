@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open…",
             ["File"],
             Some("Cmd+O"),
-            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load, {readOnly?: bool}: true opens it for reading only (commands that would change it are refused, and its file isn't written over) until file.enableEditing, and {lockReadOnly?: bool}: true opens it read-only for good (file.enableEditing is refused); these three need `path` or `base64` (no dialog asks for the file) → {index, title, sheets, warnings, recalculated, readOnly, lockReadOnly}; a file already open (however its path is spelled) is switched to as it is → {index, alreadyOpen, readOnly, lockReadOnly, recalculateIgnored?, readOnlyIgnored?}: readOnly or lockReadOnly is refused while it is open for editing, lockReadOnly locks it while it is read-only, and readOnlyIgnored says it stays more read-only than asked",
+            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (only a formula stored without one is calculated, with the formulas that depend on it); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load, {readOnly?: bool}: true opens it for reading only (commands that would change it are refused, and its file isn't written over) until file.enableEditing, and {lockReadOnly?: bool}: true opens it read-only for good (file.enableEditing is refused); these three need `path` or `base64` (no dialog asks for the file) → {index, title, sheets, warnings, recalculated, readOnly, lockReadOnly, calculatedWithoutResult?: how many formulas were stored without a result, when the stored results are shown}; a file already open (however its path is spelled) is switched to as it is → {index, alreadyOpen, readOnly, lockReadOnly, recalculateIgnored?, readOnlyIgnored?}: readOnly or lockReadOnly is refused while it is open for editing, lockReadOnly locks it while it is read-only, and readOnlyIgnored says it stays more read-only than asked",
             always,
             open
         ),
@@ -137,7 +137,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // Formulas are calculated again unless the caller asks for the results stored in the file, or
     // the workbook was saved in manual calculation mode and doesn't ask to be calculated on load.
     let recalculate = recalculate.unwrap_or(wb.calc.mode != gridcraft_model::CalcMode::Manual || wb.calc.full_calc_on_load);
-    let mut doc = DocState::with_recalc(wb, path, title, recalculate);
+    let (mut doc, without_result) = DocState::with_recalc(wb, path, title, recalculate);
     doc.read_only = read_only.unwrap_or(false);
     doc.read_only_locked = lock_read_only.unwrap_or(false);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
@@ -154,7 +154,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Message(message));
     }
     let d = s.doc()?;
-    Ok(json!({
+    let mut r = json!({
         "index": i,
         "title": d.display_title(),
         "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
@@ -162,7 +162,11 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         "recalculated": recalculate,
         "readOnly": d.read_only,
         "lockReadOnly": d.read_only_locked,
-    }))
+    });
+    if !recalculate {
+        r["calculatedWithoutResult"] = json!(without_result);
+    }
+    Ok(r)
 }
 
 /// `file.open` of a file that is already open (document `i`): switches to it, as it is, without

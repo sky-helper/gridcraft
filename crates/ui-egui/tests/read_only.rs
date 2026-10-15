@@ -452,7 +452,12 @@ fn app_open_opens_read_only_and_says_how_it_opened() {
     let mut h = harness(Session::new(), Services::default());
     let reply =
         control(&mut h, "app.open", json!({"name": "ledger.xlsx", "base64": book, "recalculate": false, "readOnly": true, "lockReadOnly": true}));
-    assert_eq!(reply, Some(json!({"ok": true, "result": {"title": "ledger.xlsx", "readOnly": true, "lockReadOnly": true, "recalculated": false}})));
+    assert_eq!(
+        reply,
+        Some(
+            json!({"ok": true, "result": {"title": "ledger.xlsx", "readOnly": true, "lockReadOnly": true, "recalculated": false, "calculatedWithoutResult": 0}})
+        )
+    );
     let info = h.state_mut().session.run("document.inspect", json!({})).unwrap();
     assert_eq!((info["readOnly"].clone(), info["lockReadOnly"].clone()), (json!(true), json!(true)));
     assert_eq!(value(&h, "A1"), stored, "the result stored in the file");

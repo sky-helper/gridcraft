@@ -877,7 +877,34 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, reached.as_ref());
+        self.run(wb, all, reached.as_ref(), true);
+    }
+
+    /// Calculates the formulas without a result, and the formulas that depend on them, in a
+    /// workbook that shows the results stored with it: a file has no result for a formula saved by
+    /// a program that doesn't calculate. Every other formula keeps its result, volatile ones
+    /// included, and so does one that reads a formula without a result only through a reference
+    /// found while evaluating (`INDIRECT`, `OFFSET`, a name, a table reference). The graph must be
+    /// built ([`Calc::rebuild`]). Returns the number of formulas that had no result.
+    pub fn recalc_missing(&mut self, wb: &mut Workbook) -> usize {
+        // A calculated formula is never blank (a blank shows as 0), except at the corner of an
+        // array that keeps its blanks (GROUPBY, PIVOTBY), which has its other results in its range.
+        let missing: Vec<Key> = self
+            .graph
+            .nodes
+            .keys()
+            .copied()
+            .filter(|&(si, c)| {
+                let Some(sh) = wb.sheet(si) else { return false };
+                sh.cell(c).is_some_and(|cell| cell.value.is_empty())
+                    && !sh.spill_ranges.get(&c).is_some_and(|r| sh.spill.range(r.start..=r.end).any(|(x, _)| r.contains(*x)))
+            })
+            .collect();
+        if !missing.is_empty() {
+            let dirty = self.dirty_closure(wb, &missing, false);
+            self.run(wb, dirty, None, false);
+        }
+        missing.len()
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -914,7 +941,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, None);
+            self.run(wb, own, None, true);
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -960,17 +987,17 @@ impl Calc {
         }
         let t0 = prof_now();
         let reached = self.kept_value_readers(wb, &seeds, &[]);
-        let dirty = self.dirty_closure_from(&reached, &seeds);
+        let dirty = self.dirty_closure_from(&reached, &seeds, true);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, Some(&reached));
+        self.run(wb, dirty, Some(&reached), true);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
     }
 
-    fn dirty_closure(&self, _wb: &Workbook, seeds: &[Key]) -> Vec<Key> {
-        self.dirty_closure_from(&self.readers(seeds), seeds)
+    fn dirty_closure(&self, _wb: &Workbook, seeds: &[Key], all_dynamic: bool) -> Vec<Key> {
+        self.dirty_closure_from(&self.readers(seeds), seeds, all_dynamic)
     }
 
     /// The formulas that read one of `seeds`, directly or through other formulas (a seed itself
@@ -1059,7 +1086,7 @@ impl Calc {
 
     /// What a change to `seeds` recalculates: the seeds' own formulas, their `readers`, and every
     /// dynamic formula with what reads it.
-    fn dirty_closure_from(&self, readers: &HashSet<Key>, seeds: &[Key]) -> Vec<Key> {
+    fn dirty_closure_from(&self, readers: &HashSet<Key>, seeds: &[Key], all_dynamic: bool) -> Vec<Key> {
         let mut seen = readers.clone();
         let mut queue: VecDeque<Key> = VecDeque::new();
         for k in seeds {
@@ -1067,9 +1094,11 @@ impl Calc {
                 queue.push_back(*k);
             }
         }
-        for k in &self.graph.dynamic {
-            if seen.insert(*k) {
-                queue.push_back(*k);
+        if all_dynamic {
+            for k in &self.graph.dynamic {
+                if seen.insert(*k) {
+                    queue.push_back(*k);
+                }
             }
         }
         let mut deps = Vec::new();
@@ -1087,11 +1116,17 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back. `reached`: after an edit, the
     /// formulas that read a changed cell (see `PassHost::reached`).
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, reached: Option<&HashSet<Key>>) {
+    /// Changed spills revisit all dynamic formulas, or only those evaluated in this run when opening stored results.
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, reached: Option<&HashSet<Key>>, all_dynamic: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
+        // The formulas evaluated so far, when only those are evaluated again.
+        let mut evaluated: HashSet<Key> = HashSet::default();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
+            }
+            if !all_dynamic {
+                evaluated.extend(dirty.iter().copied());
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
@@ -1188,7 +1223,7 @@ impl Calc {
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
-                spill_changes.extend(self.graph.dynamic.iter().copied());
+                spill_changes.extend(self.graph.dynamic.iter().copied().filter(|k| all_dynamic || evaluated.contains(k)));
             }
             // An area a formula no longer spills over may unblock another formula's array.
             for (si, o) in freed {
@@ -1210,7 +1245,7 @@ impl Calc {
             if spill_changes.is_empty() {
                 break;
             }
-            dirty = self.dirty_closure(wb, &spill_changes);
+            dirty = self.dirty_closure(wb, &spill_changes, all_dynamic);
         }
     }
 }

@@ -130,25 +130,29 @@ const UNDO_LIMIT: usize = 100;
 
 impl DocState {
     pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
-        DocState::with_recalc(wb, path, title, true)
+        DocState::with_recalc(wb, path, title, true).0
     }
 
     /// A document whose formulas are calculated again (`recalculate`), or that shows the results
-    /// stored with the workbook, as `file.open {recalculate: false}` opens it. A formula stored
-    /// without a result is then blank until it is calculated. The dependency graph is built either
-    /// way, so later edits recalculate as in any document: in automatic mode, what depends on the
-    /// edit and the formulas recalculated after every edit (volatile functions, names…).
-    pub fn with_recalc(mut wb: Workbook, path: Option<String>, title: String, recalculate: bool) -> DocState {
+    /// stored with the workbook, as `file.open {recalculate: false}` opens it: then only the
+    /// formulas stored without a result are calculated, with the formulas that depend on them
+    /// ([`Calc::recalc_missing`]), and their number comes with the document (0 when recalculating).
+    /// The dependency graph is built either way, so later edits recalculate as in any document: in
+    /// automatic mode, what depends on the edit and the formulas recalculated after every edit
+    /// (volatile functions, names…).
+    pub fn with_recalc(mut wb: Workbook, path: Option<String>, title: String, recalculate: bool) -> (DocState, usize) {
         let mut calc = Calc::new();
-        if recalculate {
+        let without_result = if recalculate {
             calc.recalc_all(&mut wb);
+            0
         } else {
             calc.rebuild(&wb);
-        }
+            calc.recalc_missing(&mut wb)
+        };
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         let uid = NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        DocState {
+        let doc = DocState {
             saved: wb.clone(),
             wb,
             calc,
@@ -165,7 +169,8 @@ impl DocState {
             read_only: false,
             read_only_locked: false,
             book: uid,
-        }
+        };
+        (doc, without_result)
     }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)

@@ -18,8 +18,8 @@ Convert to `.xlsx` to save the imported workbook; ODS output is not supported.
 
 Files open as in the app: formulas are calculated again, except in a workbook saved in manual
 calculation mode that doesn't ask to be calculated on load (`fullCalcOnLoad`, or an `.xls` saved
-uncalculated), which keeps the results stored in it (`run --cmd formulas.calculateNow` calculates
-them).
+uncalculated), which keeps the results stored in it and calculates only the formulas stored without
+one, with the formulas that depend on them (`run --cmd formulas.calculateNow` calculates them all).
 
 ```sh
 cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- <subcommand>

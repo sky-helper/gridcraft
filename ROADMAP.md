@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (sheets without page setup keep the default paper on save; row heights saved in a file are kept on open and save; workbooks can open with their stored results instead of recalculating; the web build takes control requests from the page that embeds it; a host adds fonts at runtime: CJK on the web build; the web build shows a CJK interface once added fonts draw it; read-only workbooks: Enable Editing per workbook, app.open and MCP take the open options) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (sheets without page setup keep the default paper on save; row heights saved in a file are kept on open and save; workbooks can open with their stored results, calculating only formulas stored without one; the web build takes control requests from the page that embeds it; a host adds fonts at runtime: CJK on the web build; the web build shows a CJK interface once added fonts draw it; read-only workbooks: Enable Editing per workbook, app.open and MCP take the open options) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-15 | Opening with stored results calculates the formulas stored without one and the formulas that depend on them, so a file from a program that doesn't calculate formulas (openpyxl, for one) no longer shows them blank; the others keep their stored results |
 | 2026-10-15 | XLSX: saving no longer adds `<pageSetup>` to sheets that had none (written without `paperSize` it is Letter, so sheets printed on the application's default paper, A4 in most locales, became Letter); paper sizes GridCraft has no name for keep their number, and `pageLayout.size` / `pageLayout.pageSetup` keep paper names given in another spelling (`11x17`, `A-4`) as Tabloid and A4 and refuse unknown ones |
 | 2026-10-15 | Opening and saving a file keeps the row heights it saved: only rows saved without a height are fitted on open, a saved height is read even when it equals the default (a 15pt row on a 14.25pt sheet came back 14.25pt), and merged cells no longer size their row (a wrapped paragraph merged across columns grew it to 409.5pt), while an edit never shrinks a row merged cells cross |
 | 2026-10-15 | Read-only workbooks: `file.open {readOnly: true}` refuses every command that would change the workbook (all undo steps but the view ones, plus undo, Cut, Calculate Now…) and any save or export over its file, until `file.enableEditing` (refused with `lockReadOnly: true`), which applies to every window on the workbook and replays from journals and scripts; opening an open file never loosens it, and Save As writes a copy; the window shows an info bar with Enable Editing and "[Read-Only]" in the title, typing and the filter menu open nothing, and Save asks for a copy's name; the control channel's `app.open` and MCP `open_workbook` take `readOnly`, `lockReadOnly` and `recalculate` |
@@ -200,6 +201,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Progress log: formulas stored without a result calculated when opening with stored results |
 | 2026-10-15 | minor | Progress log: sheets without page setup keep the default paper on save |
 | 2026-10-15 | minor | Progress log: row heights saved in a file kept on open and save |
 | 2026-10-15 | minor | Progress log: read-only workbooks follow-ups (Enable Editing per workbook and journaled, reopening never loosens, Save As copies, `app.open` and `open_workbook` options) |
