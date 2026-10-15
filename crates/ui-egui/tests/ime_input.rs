@@ -255,6 +255,23 @@ fn clicking_another_cell_while_composing_enters_what_was_composed() {
 }
 
 #[test]
+fn an_empty_ime_event_leaves_keytips_open() {
+    // Wayland: winit sends empty pre-edit text on each text-input `done`, also when the IME is
+    // turned off, as it is when keytips open (the grid stops asking for it).
+    let mut h = harness("A1");
+    frame(&mut h, press(Key::F10));
+    assert!(h.state().keytips.prefix().is_some());
+    let empty_at_caret = Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: Some(0..0) });
+    frame(&mut h, [preedit(""), empty_at_caret, commit("")]);
+    assert!(h.state().keytips.prefix().is_some(), "an empty IME event closed the keytips");
+    frame(&mut h, press(Key::H));
+    assert_eq!(h.state().keytips.prefix(), Some("H"));
+    // Composed text closes them, as before.
+    frame(&mut h, [commit("가")]);
+    assert!(h.state().keytips.prefix().is_none());
+}
+
+#[test]
 fn typing_arrows_shortcuts_and_f2_are_unchanged() {
     let mut h = harness("C3");
     for c in ["a", "b", "c"] {

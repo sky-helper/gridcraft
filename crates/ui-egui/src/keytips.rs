@@ -58,7 +58,10 @@ impl KeyTips {
         for (index, event) in events.iter().enumerate() {
             let mut handled = false;
             match event {
-                Event::PointerButton { pressed: true, .. } | Event::MouseWheel { .. } | Event::WindowFocused(false) | Event::Ime(_) => self.clear(),
+                Event::PointerButton { pressed: true, .. } | Event::MouseWheel { .. } | Event::WindowFocused(false) => self.clear(),
+                // Text composed by an input method, not the empty pre-edit text that Wayland sends
+                // whenever the IME is turned on or off (the grid turns it off for keytips).
+                Event::Ime(_) if crate::editor::composes_text(event) => self.clear(),
                 Event::Copy | Event::Cut | Event::Paste(_) => self.clear(),
                 Event::ModifiersChanged(m) => {
                     if command_modifier(*m) || (mac && m.alt) {

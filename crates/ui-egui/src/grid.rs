@@ -2596,7 +2596,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         // too. Focusing the cell editor now would interrupt the composition, so the grid keeps
         // the keyboard and the editor takes the IME events from here until the composition
         // ends (`EditState::ime_routing`); the events before this one were handled here.
-        if !shortcut_pressed && composes_text(&ev) {
+        if !shortcut_pressed && crate::editor::composes_text(&ev) {
             app.begin_edit(Some(String::new()), false);
             if let Some(ed) = app.editor.as_mut() {
                 ed.ime_routing = Some(resp.id);
@@ -2737,12 +2737,6 @@ fn ask_for_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: 
             should_interrupt_composition: false,
         })
     });
-}
-
-/// An IME event with text to compose or commit (some integrations repeat empty ones while
-/// nothing is being composed; a newline is Enter's job).
-fn composes_text(event: &egui::Event) -> bool {
-    matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) if !text.is_empty() && text != "\n" && text != "\r")
 }
 
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {

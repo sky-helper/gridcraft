@@ -53,6 +53,13 @@ pub struct EditState {
     pub preedit: Option<Range<usize>>,
 }
 
+/// An IME event with text to compose or commit: not the empty ones some integrations repeat while
+/// nothing is composed (Wayland on every text-input `done`, so also whenever the IME is turned on
+/// or off) or send to end a composition, nor a newline (Enter's job).
+pub fn composes_text(event: &egui::Event) -> bool {
+    matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) if !text.is_empty() && text != "\n" && text != "\r")
+}
+
 impl EditState {
     pub fn new(sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool) -> EditState {
         let caret = text.chars().count();
@@ -455,6 +462,24 @@ mod tests {
         e.caret = 2;
         assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 1 }));
         assert_eq!((e.text.as_str(), e.caret), ("a", 1));
+    }
+
+    #[test]
+    fn composes_text_skips_empty_and_newline_events() {
+        use egui::{Event, ImeEvent};
+        let preedit = |text: &str| Event::Ime(ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+        assert!(composes_text(&preedit("ㅎ")));
+        assert!(composes_text(&Event::Ime(ImeEvent::Commit("日本".into()))));
+        for event in [
+            preedit(""),
+            preedit("\n"),
+            Event::Ime(ImeEvent::Commit(String::new())),
+            Event::Ime(ImeEvent::Commit("\r".into())),
+            Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+            Event::Text("a".into()),
+        ] {
+            assert!(!composes_text(&event), "{event:?}");
+        }
     }
 
     #[test]
