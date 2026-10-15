@@ -15,6 +15,9 @@
 //! `protocol`), and `&author=` names the user for notes and comments.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// Plain JSON, so its tests run natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod font_message;
 #[cfg(target_arch = "wasm32")]
 mod host;
 // Plain JSON, so its tests run natively.

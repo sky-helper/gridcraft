@@ -2,13 +2,22 @@
 //! GridCraft in an `<iframe>` (such as a Nextcloud app). Messages are plain objects with a `type`:
 //!
 //! - `gridcraft:ready` (to the parent): `{ version, capabilities }`, the app is listening; send a
-//!   file now. `capabilities` names the optional messages it understands: `["control"]`.
+//!   file now. `capabilities` names the optional messages it understands: `["control", "font"]`.
 //! - `gridcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array`. It opens like a workbook picked with File › Open or dropped on the window.
 //! - `gridcraft:control` (from the parent): `{ id, method, params? }`, a control-channel request
 //!   (the desktop channel's methods, `docs/control-protocol.md`), answered with `gridcraft:reply`
 //!   (to the parent): `{ id, ok: true, result }` or `{ id, ok: false, error }` (see
 //!   [`crate::protocol`]). Opens and requests run in the order they arrive.
+//! - `gridcraft:font` (from the parent): `{ name, bytes, index? }`, a TrueType or OpenType file
+//!   (not WOFF; `index` picks the face in a collection) that every font family falls back on:
+//!   the browser has no system fonts, so this is how text in scripts egui's own fonts lack
+//!   (Chinese, Japanese, Korean) gets glyphs. Send fonts after `gridcraft:ready` and before
+//!   `gridcraft:open`; the app redraws with them at its next frame. Answered with
+//!   `gridcraft:fontResult` (to the parent): `{ name, ok: true, added, covers }` (`added` false
+//!   when a font of that name was already added and this one was ignored), or
+//!   `{ name, ok: false, error }` for a file that isn't a readable font, one over 64 MiB, or a
+//!   font past 32 (256 MiB in all).
 //! - `gridcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file GridCraft would otherwise download: Save and Save As (an .xlsx workbook) and Export
 //!   as PDF. A workbook handed over by Save counts as saved from then on; the parent stores it
@@ -25,12 +34,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gridcraft_ui_egui::{Services, SheetApp};
+use gridcraft_ui_egui::{Services, SheetApp, theme};
 use serde_json::Value as Json;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 
+use crate::font_message;
 use crate::protocol::{self, Queue};
 
 /// Saving one of these hands the whole workbook to the parent, which stores it: the workbook
@@ -103,7 +113,7 @@ impl Bridge {
     }
 
     pub fn post_ready(&self) {
-        let capabilities = js_sys::Array::of1(&JsValue::from_str("control"));
+        let capabilities = js_sys::Array::of2(&JsValue::from_str("control"), &JsValue::from_str("font"));
         self.send(&[("type", "gridcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into()), ("capabilities", capabilities.into())]);
     }
 
@@ -159,6 +169,16 @@ impl Bridge {
                     bridge.queue.borrow_mut().open(name, bytes);
                 }
                 Some(protocol::CONTROL) => bridge.hear_control(&data),
+                Some("gridcraft:font") => {
+                    let name = string(&data, "name").unwrap_or_default();
+                    let result = add_font(&name, &data);
+                    if let Err(e) = &result {
+                        log::error!("couldn't add font {name:?}: {e}");
+                    }
+                    if !bridge.post_json(&font_message::font_result(&name, &result)) {
+                        log::error!("couldn't tell the page about font {name:?}");
+                    }
+                }
                 _ => return,
             }
             ctx.request_repaint();
@@ -262,17 +282,41 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
     Some(m)
 }
 
+/// `gridcraft:font`, checked in the order `app.font.add` is: the face number, the bytes, then what
+/// `theme::add_font` checks before reading a font, so a font already added or too large is never
+/// copied out of JavaScript. The app notices an added font and rebuilds its fonts at the next frame.
+fn add_font(name: &str, data: &JsValue) -> Result<theme::FontAdded, String> {
+    let index = js_sys::Reflect::get(data, &JsValue::from_str("index")).unwrap_or(JsValue::UNDEFINED);
+    let index = if index.is_undefined() || index.is_null() {
+        Json::Null
+    } else {
+        // Anything but a finite number becomes a value `face_index` refuses.
+        index.as_f64().and_then(serde_json::Number::from_f64).map_or(Json::Bool(false), Json::Number)
+    };
+    let index = theme::face_index(Some(&index))?;
+    let bytes = byte_array(data).ok_or("`bytes` must be an ArrayBuffer or a Uint8Array")?;
+    if let Some(known) = theme::check_new_font(name, bytes.length() as usize)? {
+        return Ok(known);
+    }
+    theme::add_font(name, bytes.to_vec(), index)
+}
+
 fn string(data: &JsValue, key: &str) -> Option<String> {
     js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
 }
 
 /// `bytes` as an `ArrayBuffer` or `Uint8Array`.
 fn bytes(data: &JsValue) -> Option<Vec<u8>> {
+    byte_array(data).map(|array| array.to_vec())
+}
+
+/// A view of `bytes` (an `ArrayBuffer` or `Uint8Array`); nothing is copied yet.
+fn byte_array(data: &JsValue) -> Option<js_sys::Uint8Array> {
     let bytes = js_sys::Reflect::get(data, &JsValue::from_str("bytes")).ok()?;
     if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-        Some(array.to_vec())
+        Some(array.clone())
     } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-        Some(js_sys::Uint8Array::new(&bytes).to_vec())
+        Some(js_sys::Uint8Array::new(&bytes))
     } else {
         None
     }
