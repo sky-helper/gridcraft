@@ -697,6 +697,34 @@ fn full_recalculation_clears_full_calc_on_load() {
     assert_eq!(t.num("A1"), 2.0);
 }
 
+/// In a workbook showing the results stored with it, the formulas without a result are calculated
+/// with the formulas that depend on them, and only those: a volatile formula with a result keeps it,
+/// even when an array calculated beside it spills. The workbook still asks to be calculated in full
+/// on load, as its other results haven't been.
+#[test]
+fn formulas_without_a_result_are_calculated_with_their_dependents() {
+    let mut t = T::new();
+    t.calc.fixed_now = Some(46000.5);
+    t.wb.calc.full_calc_on_load = true;
+    let stored = |f: &str, v: f64| Cell { value: Value::Number(v), formula: Some(std::sync::Arc::new(Formula::new(f))), style: Default::default() };
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell::value(Value::Number(10.0)));
+    // B1 and E1 have no result; C1 depends on B1, D1 is a stored TODAY() that E1 reads, F1 reads
+    // nothing without a result.
+    sh.cells.set(c("B1"), Cell::formula(Formula::new("=A1*2")));
+    sh.cells.set(c("C1"), stored("=B1+1", 99.0));
+    sh.cells.set(c("D1"), stored("=TODAY()", 45000.0));
+    sh.cells.set(c("E1"), Cell::formula(Formula::new("=D1+SEQUENCE(2)")));
+    sh.cells.set(c("F1"), stored("=A1*3", 5.0));
+    t.calc.rebuild(&t.wb);
+    assert_eq!(t.calc.recalc_missing(&mut t.wb), 2);
+    assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("F1")), (20.0, 21.0, 45000.0, 5.0));
+    assert_eq!((t.num("E1"), t.num("E2")), (45001.0, 45002.0));
+    assert!(t.wb.calc.full_calc_on_load);
+    // Every formula has a result now.
+    assert_eq!(t.calc.recalc_missing(&mut t.wb), 0);
+}
+
 #[test]
 fn text_function() {
     let mut t = T::new();

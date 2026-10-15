@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open…",
             ["File"],
             Some("Cmd+O"),
-            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), and {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load → {index, title, sheets, warnings, recalculated}; a path already open is switched to as it is → {index, alreadyOpen, recalculateIgnored?}",
+            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), and {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (only a formula stored without one is calculated, with the formulas that depend on it); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load → {index, title, sheets, warnings, recalculated, calculatedWithoutResult?: how many formulas were stored without a result, when the stored results are shown}; a path already open is switched to as it is → {index, alreadyOpen, recalculateIgnored?}",
             always,
             open
         ),
@@ -97,7 +97,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // Formulas are calculated again unless the caller asks for the results stored in the file, or
     // the workbook was saved in manual calculation mode and doesn't ask to be calculated on load.
     let recalculate = recalculate.unwrap_or(wb.calc.mode != gridcraft_model::CalcMode::Manual || wb.calc.full_calc_on_load);
-    let mut doc = DocState::with_recalc(wb, path, title, recalculate);
+    let (mut doc, without_result) = DocState::with_recalc(wb, path, title, recalculate);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -112,13 +112,17 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Message(message));
     }
     let d = s.doc()?;
-    Ok(json!({
+    let mut r = json!({
         "index": i,
         "title": d.display_title(),
         "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
         "warnings": warnings,
         "recalculated": recalculate,
-    }))
+    });
+    if !recalculate {
+        r["calculatedWithoutResult"] = json!(without_result);
+    }
+    Ok(r)
 }
 
 fn save(s: &mut Session, p: &Json) -> Result<Json> {

@@ -53,6 +53,21 @@ fn shared_formulas_and_value_types() {
     assert!(rep.warnings.iter().any(|w| w.contains("styles")));
 }
 
+/// A formula stored without a result (no `<v>`, or an empty one that isn't text, as a program that
+/// doesn't calculate writes it) reads as blank, told apart from a formula whose result is an empty
+/// text (`t="str"` with an empty `<v>`): a workbook opened with its stored results calculates the
+/// first kind only. Saved, each is written back as it was read.
+#[test]
+fn formulas_without_a_result_are_told_from_empty_text_results() {
+    let body = r#"<sheetData><row r="1"><c r="A1"><f>1+1</f></c><c r="B1"><f>1+1</f><v></v></c><c r="C1" t="str"><f>"x"</f></c><c r="D1" t="str"><f>"x"</f><v></v></c><c r="E1" t="str"><f>"x"</f><v/></c></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let values = |wb: &gridcraft_model::Workbook| ["A1", "B1", "C1", "D1", "E1"].map(|a| wb.sheet(0).unwrap().value(at(a)));
+    assert_eq!(values(&wb), [Value::Empty, Value::Empty, Value::Empty, Value::text(""), Value::text("")]);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(values(&back), values(&wb));
+    assert!(back.calc.full_calc_on_load, "the formulas without a result ask for a calculation");
+}
+
 #[test]
 fn workbook_settings_names_and_states() {
     let wb_extra = r#"<workbookPr date1904="1"/><workbookProtection workbookPassword="83AF" lockStructure="1"/><bookViews><workbookView activeTab="0"/></bookViews>"#;

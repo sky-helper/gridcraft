@@ -1806,6 +1806,114 @@ fn array_results_show_when_opening_with_stored_results() {
     assert_eq!((col(&s, 'B'), col(&s, 'C')), (n([2.0, 4.0, 6.0]), n([1.0, 2.0, 3.0])));
 }
 
+/// Opens `book` showing its stored results; returns `file.open`'s result.
+fn open_with_stored_results(s: &mut Session, book: &str) -> serde_json::Value {
+    s.execute("file.open", json!({"name": "stored.xlsx", "base64": book, "recalculate": false})).unwrap()
+}
+
+/// Opened with its stored results, a workbook still shows a result for every formula: a formula
+/// stored without one, as a program that doesn't calculate writes it (no `<v>`, or an empty one),
+/// is calculated from the stored results of the cells it reads. Formulas stored with a result keep
+/// it: an out-of-date one, an empty text, a `TODAY()` its saved date. A workbook saved in manual
+/// calculation mode, which opens with its stored results by default, does the same.
+#[test]
+fn formulas_stored_without_a_result_are_calculated_when_opening_with_stored_results() {
+    // A1 is 10. B1 has no result and C1 an empty one; D1 stores a TODAY() of 2023-03-15 (45000)
+    // and E1 reads it, without a result; F1 stores an out-of-date 5 and G1 an empty text.
+    let rows = r#"<row r="1"><c r="A1"><v>10</v></c><c r="B1"><f>A1*2</f></c><c r="C1"><f>A1+1</f><v></v></c><c r="D1"><f>TODAY()</f><v>45000</v></c><c r="E1"><f>D1+1</f></c><c r="F1"><f>A1*3</f><v>5</v></c><c r="G1" t="str"><f>"x"</f><v></v></c></row>"#;
+    for (calc_pr, recalculate) in [("", Some(false)), (r#"calcMode="manual""#, None)] {
+        let mut s = s();
+        let mut p = json!({"name": "stored.xlsx", "base64": stored_results_workbook(calc_pr, rows)});
+        if let Some(r) = recalculate {
+            p["recalculate"] = json!(r);
+        }
+        let r = s.execute("file.open", p).unwrap();
+        assert_eq!((v(&s, "B1"), v(&s, "C1"), v(&s, "E1")), (Value::Number(20.0), Value::Number(11.0), Value::Number(45001.0)), "{calc_pr}");
+        assert_eq!((v(&s, "D1"), v(&s, "F1"), v(&s, "G1")), (Value::Number(45000.0), Value::Number(5.0), Value::text("")), "{calc_pr}");
+        assert_eq!((r["recalculated"].clone(), r["calculatedWithoutResult"].clone()), (json!(false), json!(3)), "{calc_pr}");
+        // Opening didn't change the workbook.
+        assert!(!s.doc().unwrap().is_dirty());
+    }
+    // Every formula has a result: none is calculated. Recalculating, every one is.
+    let mut s = s();
+    let r = open_with_stored_results(&mut s, &stored_results_workbook("", STALE_A1));
+    assert_eq!((r["calculatedWithoutResult"].clone(), v(&s, "A1")), (json!(0), Value::Number(5.0)));
+    let r = s.execute("file.open", json!({"name": "again.xlsx", "base64": stored_results_workbook("", rows)})).unwrap();
+    assert_eq!((r["recalculated"].clone(), r.get("calculatedWithoutResult")), (json!(true), None));
+}
+
+/// The formulas that depend on a formula stored without a result are calculated with it, in turn,
+/// although they have results of their own (worked out without that formula's result); the
+/// formulas that don't depend on it keep theirs.
+#[test]
+fn formulas_depending_on_a_formula_stored_without_a_result_are_calculated_with_it() {
+    // B1 has no result; C1 reads it and D1 reads C1, with out-of-date results; E1 reads neither.
+    let rows = r#"<row r="1"><c r="A1"><v>10</v></c><c r="B1"><f>A1*2</f></c><c r="C1"><f>B1+1</f><v>99</v></c><c r="D1"><f>C1*10</f><v>77</v></c><c r="E1"><f>A1*3</f><v>5</v></c></row>"#;
+    let mut s = s();
+    let r = open_with_stored_results(&mut s, &stored_results_workbook("", rows));
+    let row = (v(&s, "B1"), v(&s, "C1"), v(&s, "D1"), v(&s, "E1"));
+    assert_eq!(row, (Value::Number(20.0), Value::Number(21.0), Value::Number(210.0), Value::Number(5.0)));
+    assert_eq!(r["calculatedWithoutResult"], json!(1));
+}
+
+/// Array results stored over their ranges keep showing beside formulas calculated for want of a
+/// result, which read them, and a stored `TODAY()` keeps its date while those formulas spill; an
+/// array formula stored without results fills its range.
+#[test]
+fn array_results_beside_formulas_stored_without_a_result() {
+    // B1:B3 is a legacy array {=A1:A3*2} and C1:C3 a dynamic SEQUENCE(3), with stored results that
+    // differ from what they calculate. Without results: D1 sums C1:C3, E1:E3 is a legacy array
+    // {=A1:A3*10} and F1:F2 a dynamic SEQUENCE(2). G1 stores a TODAY() of 2023-03-15 (45000).
+    let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="array" ref="B1:B3">A1:A3*2</f><v>20</v></c><c r="C1" cm="1"><f t="array" ref="C1:C3">_xlfn.SEQUENCE(3)</f><v>7</v></c><c r="D1"><f>SUM(C1:C3)</f></c><c r="E1"><f t="array" ref="E1:E3">A1:A3*10</f></c><c r="F1" cm="1"><f t="array" ref="F1:F2">_xlfn.SEQUENCE(2)</f></c><c r="G1"><f>TODAY()</f><v>45000</v></c></row>
+        <row r="2"><c r="A2"><v>2</v></c><c r="B2"><v>40</v></c><c r="C2"><v>8</v></c></row>
+        <row r="3"><c r="A3"><v>3</v></c><c r="B3"><v>60</v></c><c r="C3"><v>9</v></c></row>"#;
+    let col = |s: &Session, c: char| (1..=3).map(|r| v(s, &format!("{c}{r}"))).collect::<Vec<_>>();
+    let n = |xs: [f64; 3]| xs.map(Value::Number).to_vec();
+    let mut s = s();
+    let r = open_with_stored_results(&mut s, &stored_results_workbook("", rows));
+    assert_eq!((col(&s, 'B'), col(&s, 'C')), (n([20.0, 40.0, 60.0]), n([7.0, 8.0, 9.0])));
+    assert_eq!((v(&s, "D1"), v(&s, "G1")), (Value::Number(24.0), Value::Number(45000.0)));
+    assert_eq!(col(&s, 'E'), n([10.0, 20.0, 30.0]));
+    assert_eq!(col(&s, 'F'), vec![Value::Number(1.0), Value::Number(2.0), Value::Empty]);
+    assert_eq!(r["calculatedWithoutResult"], json!(3));
+}
+
+/// A PIVOTBY's corner is blank once calculated; the results it stores over its range show that it
+/// has results, so it isn't taken for a formula stored without one when its workbook opens with
+/// its stored results.
+#[test]
+fn a_blank_array_corner_is_a_stored_result() {
+    let mut s = s();
+    for (cell, input) in
+        [("A1", "East"), ("A2", "West"), ("A3", "East"), ("B1", "x"), ("B2", "y"), ("B3", "y"), ("C1", "1"), ("C2", "2"), ("C3", "4")]
+    {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    s.execute("cell.set", json!({"cell": "E1", "input": "=PIVOTBY(A1:A3,B1:B3,C1:C3,SUM,0)"})).unwrap();
+    let pivot = |s: &Session| (v(s, "E1"), v(s, "F1"), v(s, "E2"), v(s, "H4"));
+    let expected = (Value::Empty, Value::text("x"), Value::text("East"), Value::Number(7.0));
+    assert_eq!(pivot(&s), expected);
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    let r = open_with_stored_results(&mut s, &saved);
+    assert_eq!(r["calculatedWithoutResult"], json!(0));
+    assert_eq!(pivot(&s), expected);
+    // The formula is still live.
+    s.execute("cell.set", json!({"cell": "C3", "input": "10"})).unwrap();
+    assert_eq!(v(&s, "H4"), Value::Number(13.0));
+}
+
+/// A formula referring to another workbook isn't calculated, as GridCraft doesn't follow links:
+/// stored with a result it keeps it, which a formula calculated for want of a result reads, and
+/// stored without one it stays blank.
+#[test]
+fn links_to_other_workbooks_keep_their_stored_results_beside_formulas_without_one() {
+    let rows = r#"<row r="1"><c r="A1"><f>[1]Sheet1!A1</f><v>42</v></c><c r="B1"><f>A1*2</f></c><c r="C1"><f>[1]Sheet1!A2</f></c></row>"#;
+    let mut s = s();
+    let r = open_with_stored_results(&mut s, &stored_results_workbook("", rows));
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "C1")), (Value::Number(42.0), Value::Number(84.0), Value::Empty));
+    assert_eq!(r["calculatedWithoutResult"], json!(1));
+}
+
 fn ods_fixture() -> Vec<u8> {
     use std::io::{Cursor, Write};
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

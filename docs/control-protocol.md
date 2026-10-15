@@ -64,15 +64,20 @@ quoted in an error. The opened workbook has no save path, so Save asks where to 
 the password, and never replaces the encrypted original.
 
 `{command: "file.open", params: {path: "Report.xlsx", recalculate: false}}` opens a workbook with
-the results stored in it instead of calculating its formulas again, so a `TODAY()` keeps the date
-it was saved with. A formula stored without a result is blank until it is calculated. Without
-`recalculate`, formulas are calculated again unless the workbook was saved in manual calculation
-mode and doesn't ask to be calculated on load; an `.xlsx` with `fullCalcOnLoad`, an `.xls` saved
-uncalculated (`Uncalced`), and a workbook whose cached array results GridCraft couldn't keep (a
-range over 1 million cells, or past 4 million in all) do ask. `recalculate: true` always
-calculates. The result's `recalculated` says which happened. A path that is already open is
-switched to as it is: the result has `alreadyOpen`, and `recalculateIgnored` when `recalculate` was
-given.
+the results stored in it instead of calculating its formulas again, so a `TODAY()` keeps the date it
+was saved with. A formula stored without a result, as a program that doesn't calculate formulas
+saves them, is calculated, and so are the formulas that depend on it (their stored results were
+worked out without its result); every other formula keeps its stored result, and an empty text
+counts as a result. A dependency GridCraft only finds while calculating (`INDIRECT`, `OFFSET`,
+names, table references) doesn't count, and a formula it can't read, such as a link to another
+workbook, isn't calculated. Without `recalculate`, formulas are calculated again unless the workbook
+was saved in manual calculation mode and doesn't ask to be calculated on load; an `.xlsx` with
+`fullCalcOnLoad`, an `.xls` saved uncalculated (`Uncalced`), and a workbook whose cached array
+results GridCraft couldn't keep (a range over 1 million cells, or past 4 million in all) do ask.
+`recalculate: true` always calculates. The result's `recalculated` says which happened and, when the
+stored results are shown, `calculatedWithoutResult` how many formulas were stored without one. A
+path that is already open is switched to as it is: the result has `alreadyOpen`, and
+`recalculateIgnored` when `recalculate` was given.
 
 The stored results last until something calculates. In automatic mode an edit recalculates the
 formulas that depend on it and, as after every edit, the formulas GridCraft always recalculates and
