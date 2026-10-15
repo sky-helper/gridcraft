@@ -251,6 +251,28 @@ fn save_and_open_roundtrip() {
     let _ = std::fs::remove_file(path);
 }
 
+/// open_workbook takes how to open the file, as file.open does: read-only (edits refused), locked
+/// (Enable Editing refused), with the results stored in it; a value that isn't true or false is an
+/// invalid-arguments error.
+#[test]
+fn open_workbook_opens_read_only() {
+    let mut s = server();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": [[1, "=A1*2"]]}));
+    let path = tmp("read-only.xlsx");
+    let p = path.to_string_lossy().to_string();
+    ok(&mut s, "save_workbook", json!({"path": p}));
+    let mut s = server();
+    let r = ok(&mut s, "open_workbook", json!({"path": p, "readOnly": true, "lockReadOnly": true, "recalculate": false}));
+    assert_eq!((r["readOnly"].clone(), r["lockReadOnly"].clone(), r["recalculated"].clone()), (json!(true), json!(true), json!(false)), "{r}");
+    assert!(fails(&mut s, "set_cell", json!({"cell": "C1", "input": "x"})).contains("the workbook is open read-only"));
+    assert!(fails(&mut s, "execute_command", json!({"command": "file.enableEditing"})).contains("can't be switched to editing"));
+    let info = ok(&mut s, "inspect_workbook", json!({}));
+    assert_eq!((info["readOnly"].clone(), info["lockReadOnly"].clone()), (json!(true), json!(true)));
+    let bad = rpc(&mut s, 2, "tools/call", json!({"name": "open_workbook", "arguments": {"path": p, "readOnly": "yes"}}));
+    assert_eq!(err_code(&bad), -32602);
+    let _ = std::fs::remove_file(path);
+}
+
 /// An agent builds a small monthly budget through MCP tool calls only.
 #[test]
 fn agent_builds_a_budget() {

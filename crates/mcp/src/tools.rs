@@ -329,8 +329,18 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "open_workbook",
             "Open workbook",
-            "Open a workbook file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, .tsv, .txt, .json) and make it active. Excel 97-2003 .xls imports values, formulas and number formats; XLSB and ODS import worksheet data and cached formula values only; check the returned warnings.",
-            obj(json!({"path": string("File path")}), &["path"]),
+            "Open a workbook file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, .tsv, .txt, .json) and make it active. Excel 97-2003 .xls imports values, formulas and number formats; XLSB and ODS import worksheet data and cached formula values only; check the returned warnings. \
+             readOnly opens it for reading only (edits and saving over its file are refused) until file.enableEditing; lockReadOnly for good; \
+             recalculate: false shows the results stored in the file. A file already open is switched to as it is.",
+            obj(
+                json!({
+                    "path": string("File path"),
+                    "readOnly": boolean("Open it for reading only, until file.enableEditing"),
+                    "lockReadOnly": boolean("Open it read-only for good: file.enableEditing is refused"),
+                    "recalculate": boolean("false: show the results stored in the file instead of calculating the formulas again"),
+                }),
+                &["path"],
+            ),
             false,
         ),
         tool(
@@ -626,7 +636,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
         "create_table" => exec(b, "insert.table", pick(a, &["range", "style", "header", "name"])),
         "sort_range" => sort_range(b, a),
         "filter" => filter(b, a),
-        "open_workbook" => exec(b, "file.open", pick(a, &["path"])),
+        "open_workbook" => exec(b, "file.open", pick(a, &["path", "readOnly", "lockReadOnly", "recalculate"])),
         "save_workbook" => save_workbook(b, a),
         "new_workbook" => exec(b, "file.new", pick(a, &["sample"])),
         "undo" => exec(b, "edit.undo", pick(a, &["steps"])),

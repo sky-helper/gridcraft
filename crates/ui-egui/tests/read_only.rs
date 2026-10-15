@@ -437,3 +437,46 @@ fn screenshots_never_write_over_a_read_only_workbook() {
     assert_eq!(std::fs::read(&path).unwrap(), saved);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// `app.open` takes how to open a workbook as `file.open` does (`recalculate`, `readOnly`,
+/// `lockReadOnly`), for its bytes or a file, and says in its reply how it opened it, so the
+/// embedding page knows; a value `file.open` refuses is an error reply, and opens nothing.
+#[test]
+fn app_open_opens_read_only_and_says_how_it_opened() {
+    // RAND() is calculated again on open: its stored result shows only without recalculating.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=RAND()"})).unwrap();
+    let stored = s.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    let book = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    let mut h = harness(Session::new(), Services::default());
+    let reply =
+        control(&mut h, "app.open", json!({"name": "ledger.xlsx", "base64": book, "recalculate": false, "readOnly": true, "lockReadOnly": true}));
+    assert_eq!(reply, Some(json!({"ok": true, "result": {"title": "ledger.xlsx", "readOnly": true, "lockReadOnly": true, "recalculated": false}})));
+    let info = h.state_mut().session.run("document.inspect", json!({})).unwrap();
+    assert_eq!((info["readOnly"].clone(), info["lockReadOnly"].clone()), (json!(true), json!(true)));
+    assert_eq!(value(&h, "A1"), stored, "the result stored in the file");
+    let n = h.state().session.documents().len();
+    for params in [json!({"name": "x.xlsx", "base64": book, "readOnly": "yes"}), json!({"name": "x.xlsx", "base64": book, "recalculate": 0})] {
+        let reply = control(&mut h, "app.open", params.clone()).unwrap();
+        assert_eq!(reply["ok"], json!(false), "{params}: {reply}");
+        assert!(reply["error"].as_str().unwrap().contains("must be true or false"), "{params}: {reply}");
+    }
+    assert_eq!(h.state().session.documents().len(), n, "nothing more was opened");
+    // A file takes them the same way; opened again, it is switched to as it is.
+    let dir = test_dir("app-open");
+    let path = dir.join("book.xlsx");
+    save_kept(&path);
+    let reply = control(&mut h, "app.open", json!({"path": path, "readOnly": true})).unwrap();
+    assert_eq!(reply["result"], json!({"title": "book.xlsx", "readOnly": true, "lockReadOnly": false, "recalculated": true}), "{reply}");
+    let reply = control(&mut h, "app.open", json!({"path": path, "lockReadOnly": true})).unwrap();
+    assert_eq!(reply["result"], json!({"title": "book.xlsx", "readOnly": true, "lockReadOnly": true, "alreadyOpen": true}), "{reply}");
+    let reply = control(&mut h, "app.open", json!({"path": path, "readOnly": false, "recalculate": true})).unwrap();
+    assert_eq!(
+        reply["result"],
+        json!({"title": "book.xlsx", "readOnly": true, "lockReadOnly": true, "alreadyOpen": true, "recalculateIgnored": true, "readOnlyIgnored": true}),
+        "{reply}"
+    );
+    assert_eq!(control(&mut h, "app.open", json!({})).unwrap()["error"], json!("missing `path` or `base64`"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

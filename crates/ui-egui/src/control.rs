@@ -14,7 +14,8 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
-//! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//! - `app.open {path | name?, base64, password?, recalculate?, readOnly?, lockReadOnly?}`,
+//!   `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
 
@@ -69,6 +70,32 @@ fn wrap(r: Result<Json, String>) -> Outcome {
         Ok(v) => ok(v),
         Err(e) => err(e),
     }
+}
+
+/// `file.open`'s params for `app.open`: the file (`source`), plus the password and how to open it
+/// (`recalculate`, `readOnly`, `lockReadOnly`) as given: `file.open` checks them.
+fn open_params(p: &Json, mut source: Json) -> Json {
+    if let Some(o) = source.as_object_mut() {
+        for key in ["password", "recalculate", "readOnly", "lockReadOnly"] {
+            if let Some(v) = p.get(key) {
+                o.insert(key.into(), v.clone());
+            }
+        }
+    }
+    source
+}
+
+/// `app.open`'s reply: the workbook's title, and how `file.open` opened it (`readOnly`,
+/// `lockReadOnly`, `recalculated`; for a file already open, `alreadyOpen` and what it ignored).
+fn opened(app: &SheetApp, r: &Json) -> Json {
+    let mut reply = serde_json::Map::new();
+    reply.insert("title".into(), json!(app.session.active().map(|d| d.display_title())));
+    for key in ["readOnly", "lockReadOnly", "recalculated", "alreadyOpen", "recalculateIgnored", "readOnlyIgnored"] {
+        if let Some(v) = r.get(key) {
+            reply.insert(key.into(), v.clone());
+        }
+    }
+    Json::Object(reply)
 }
 
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
@@ -373,18 +400,26 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             return Outcome::Screenshot { path: s("path").map(str::to_string) };
         }
         "app.open" => {
-            let Some(path) = s("path") else { return err("missing `path`") };
-            // Not `open_path`: that asks for a missing password in a dialog, and programmatic
-            // calls never open one. A password-protected workbook takes `password` instead.
-            let r = app.run("file.open", json!({"path": path, "password": s("password")}));
+            // A file, or a workbook's bytes (the web build has no files: the embedding page sends
+            // them). Not `open_path`: that asks for a missing password in a dialog, and
+            // programmatic calls never open one. A password-protected workbook takes `password`.
+            let (path, params) = match (s("base64"), s("path")) {
+                (Some(base64), _) => {
+                    let name = s("name").filter(|n| !n.trim().is_empty()).unwrap_or("Book.xlsx");
+                    (None, open_params(p, json!({"name": name, "base64": base64})))
+                }
+                (None, Some(path)) => (Some(path), open_params(p, json!({"path": path}))),
+                (None, None) => return err("missing `path` or `base64`"),
+            };
+            let r = app.run("file.open", params);
             if let Ok(r) = &r {
-                app.after_open(Some(path), r);
+                app.after_open(path, r);
             }
             app.after_engine();
             match (r, app.message.take()) {
                 (Err(e), _) => err(crate::clean_error(&e)),
                 (Ok(_), Some((_, m))) => err(m),
-                (Ok(_), None) => ok(json!({"title": app.session.active().map(|d| d.display_title())})),
+                (Ok(r), None) => ok(opened(app, &r)),
             }
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
