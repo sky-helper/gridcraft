@@ -460,7 +460,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let (formula, array) = match c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic)) {
-        Some((f, array)) => (Some(f), array),
+        Some((f, array)) => (Some(Formula { legacy: !dynamic, ..f }), array),
         None => (None, None),
     };
     if let Some(range) = array.filter(|r| !r.is_single()) {
