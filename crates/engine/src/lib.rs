@@ -112,6 +112,13 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// Open read-only (`file.open {readOnly: true}`): the commands that would change the workbook
+    /// are refused ([`CommandSpec::edits_workbook`]) and its file is never written over, until
+    /// `file.enableEditing`.
+    pub read_only: bool,
+    /// Read-only for good (`file.open {lockReadOnly: true}`): `file.enableEditing` is refused, so
+    /// only reopening the file makes it editable.
+    pub read_only_locked: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -150,6 +157,8 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            read_only: false,
+            read_only_locked: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -327,13 +336,17 @@ impl Session {
     }
 
     /// Runs a command by id. Undoable commands record a history step when the workbook changed.
+    /// A read-only workbook refuses the commands that would change it before they run.
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        if let Err(why) = (spec.enabled)(self) {
+        if let Err(why) = spec.available(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        // What a read-only workbook allows (its view, finding, copying) isn't an edit: it records
+        // no undo step, and leaves a workbook without unsaved changes without them.
+        let read_only = self.active().filter(|d| d.read_only).map(|d| (d.uid, d.is_dirty()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         let result = match result {
@@ -363,12 +376,19 @@ impl Session {
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
-                d.undo.remove(0);
+            if read_only.is_none() {
+                d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
+                if d.undo.len() > UNDO_LIMIT {
+                    d.undo.remove(0);
+                }
+                d.redo.clear();
             }
-            d.redo.clear();
             d.revision += 1;
+        }
+        if let Some((uid, false)) = read_only
+            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid && d.read_only)
+        {
+            d.saved = d.wb.clone();
         }
         result
     }

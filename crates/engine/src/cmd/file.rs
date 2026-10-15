@@ -13,12 +13,32 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open…",
             ["File"],
             Some("Cmd+O"),
-            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), and {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load → {index, title, sheets, warnings, recalculated}; a path already open is switched to as it is → {index, alreadyOpen, recalculateIgnored?}",
+            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load, {readOnly?: bool}: true opens it for reading only (commands that would change it are refused, and its file isn't written over) until file.enableEditing, and {lockReadOnly?: bool}: true opens it read-only for good (file.enableEditing is refused) → {index, title, sheets, warnings, recalculated, readOnly, lockReadOnly}; a path already open is switched to as it is → {index, alreadyOpen, readOnly, lockReadOnly, recalculateIgnored?, readOnlyIgnored?}",
             always,
             open
         ),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension; a read-only workbook's own file is refused)", has_doc, |s, p| save(s, p, "file.save")),
+        cmd!(
+            noundo "file.saveAs",
+            "Save As…",
+            ["File"],
+            Some("Cmd+Shift+S"),
+            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; a read-only workbook saves a copy under another name)",
+            has_doc,
+            save_as
+        ),
+        // Not journaled: a recorded script replays edits, on workbooks that may not be read-only.
+        CommandSpec {
+            id: "file.enableEditing",
+            label: "Enable Editing",
+            menu: &[],
+            shortcut: None,
+            params: "{} lets a workbook opened read-only (file.open {readOnly: true}) be changed and saved again; refused for one opened with {lockReadOnly: true} → {readOnly: false}",
+            enabled: can_enable_editing,
+            run: enable_editing,
+            journal: false,
+            undoable: false,
+        },
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
@@ -49,22 +69,39 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
 
+/// An optional true-or-false param of `file.open`, checked before anything opens: a value that
+/// isn't true or false must not pick either quietly.
+fn open_flag(p: &Json, key: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Bool(b)) => Ok(Some(*b)),
+        Some(v) => Err(bad("file.open", format!("`{key}` must be true or false, not {v}"))),
+    }
+}
+
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
-    // Checked before anything opens: a value that isn't true or false must not pick either quietly.
-    let recalculate = match p.get("recalculate") {
-        None | Some(Json::Null) => None,
-        Some(Json::Bool(b)) => Some(*b),
-        Some(v) => return Err(bad("file.open", format!("`recalculate` must be true or false, not {v}"))),
+    let recalculate = open_flag(p, "recalculate")?;
+    // Locked read-only is read-only: it can't go with `readOnly: false`.
+    let lock_read_only = open_flag(p, "lockReadOnly")?;
+    let read_only = match (open_flag(p, "readOnly")?, lock_read_only) {
+        (Some(false), Some(true)) => {
+            return Err(bad("file.open", "`lockReadOnly: true` opens the workbook read-only; it can't go with `readOnly: false`"));
+        }
+        (read_only, lock) => read_only.or(lock),
     };
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
     } else if let Some(path) = str_param(p, "path") {
-        // Already open? Switch to it, as it is: `recalculate` doesn't apply.
+        // Already open? Switch to it, as it is: `recalculate` and `readOnly` don't apply.
         if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
             s.set_active(i);
-            let mut r = json!({"index": i, "alreadyOpen": true});
+            let d = s.doc()?;
+            let mut r = json!({"index": i, "alreadyOpen": true, "readOnly": d.read_only, "lockReadOnly": d.read_only_locked});
             if recalculate.is_some() {
                 r["recalculateIgnored"] = json!(true);
+            }
+            if read_only.is_some() {
+                r["readOnlyIgnored"] = json!(true);
             }
             return Ok(r);
         }
@@ -98,6 +135,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // the workbook was saved in manual calculation mode and doesn't ask to be calculated on load.
     let recalculate = recalculate.unwrap_or(wb.calc.mode != gridcraft_model::CalcMode::Manual || wb.calc.full_calc_on_load);
     let mut doc = DocState::with_recalc(wb, path, title, recalculate);
+    doc.read_only = read_only.unwrap_or(false);
+    doc.read_only_locked = lock_read_only.unwrap_or(false);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -118,10 +157,41 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
         "warnings": warnings,
         "recalculated": recalculate,
+        "readOnly": d.read_only,
+        "lockReadOnly": d.read_only_locked,
     }))
 }
 
-fn save(s: &mut Session, p: &Json) -> Result<Json> {
+/// Enable Editing applies to a workbook open read-only, unless it was opened read-only for good.
+fn can_enable_editing(s: &Session) -> std::result::Result<(), String> {
+    has_doc(s)?;
+    match s.active() {
+        Some(d) if d.read_only_locked => Err("the workbook was opened read-only and can't be switched to editing".into()),
+        Some(d) if d.read_only => Ok(()),
+        _ => Err("the workbook isn't open read-only".into()),
+    }
+}
+
+fn enable_editing(s: &mut Session, _: &Json) -> Result<Json> {
+    s.doc_mut()?.read_only = false;
+    Ok(json!({"readOnly": false}))
+}
+
+/// A workbook open read-only never has its file written over: saving or exporting to that file,
+/// from it or from any other workbook, is refused, so it can only be saved as a copy elsewhere.
+pub(crate) fn refuse_read_only_file(s: &Session, id: &str, path: &str) -> Result<()> {
+    let Some(d) = s.documents().iter().find(|d| d.read_only && d.path.as_deref().is_some_and(|own| crate::io::same_file(own, path))) else {
+        return Ok(());
+    };
+    let why = if s.active().is_some_and(|a| a.uid == d.uid) {
+        format!("{READ_ONLY}; save a copy under another name")
+    } else {
+        format!("{} is open read-only; save under another name", d.display_title())
+    };
+    Err(EngineError::Disabled(id.into(), why))
+}
+
+fn save(s: &mut Session, p: &Json, id: &str) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
         None => {
@@ -129,6 +199,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    refuse_read_only_file(s, id, &path)?;
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
     if std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
@@ -158,7 +229,7 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
         return ok();
     }
-    save(s, p)
+    save(s, p, "file.saveAs")
 }
 
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
@@ -189,6 +260,7 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.active_sheet = target_sheet(s, p)?;
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
+    refuse_read_only_file(s, if ext == "csv" { "file.exportCsv" } else { "file.exportHtml" }, &target)?;
     let bytes = crate::io::save_bytes(&wb, &target)?;
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))

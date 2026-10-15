@@ -430,6 +430,28 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Whether two paths name the same file: the same text, or on disk the same file reached another
+/// way (`dir/./book.xlsx`, a relative path, a link, another case on a case-insensitive disk).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn same_file(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return x.dev() == y.dev() && x.ino() == y.ino();
+        }
+    }
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn same_file(a: &str, b: &str) -> bool {
+    a == b
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64_encode(data: &[u8]) -> String {

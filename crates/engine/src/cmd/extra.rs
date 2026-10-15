@@ -728,6 +728,10 @@ pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>
 }
 
 fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
+    // Views are kept in the workbook: a read-only one shows them but doesn't save or delete them.
+    if str_param(p, "save").is_some() || str_param(p, "delete").is_some() {
+        refuse_read_only(s, "view.customViews")?;
+    }
     let d = s.doc()?;
     let mut views = stash_map(&d.wb, VIEWS_NAME);
     if let Some(name) = str_param(p, "save") {
@@ -785,6 +789,9 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let mut copy = crate::DocState::with_recalc((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()), false);
     copy.calc.circular = d.calc.circular.clone();
     copy.selection = d.selection.clone();
+    // A window on a read-only workbook is read-only too.
+    copy.read_only = d.read_only;
+    copy.read_only_locked = d.read_only_locked;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }

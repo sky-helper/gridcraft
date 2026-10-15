@@ -58,9 +58,56 @@ pub struct CommandInfo {
     pub disabled_reason: Option<String>,
 }
 
+/// Why a read-only workbook (`file.open {readOnly: true}`) refuses a command that would change it.
+pub const READ_ONLY: &str = "the workbook is open read-only";
+
+/// Undoable commands a read-only workbook still runs: they only change how a sheet is viewed
+/// (what a file's `<sheetView>` holds: zoom, frozen panes, gridlines, headings, zeros,
+/// right-to-left, formulas shown) or follow a hyperlink, not what the workbook holds.
+const VIEWING: &[&str] = &[
+    "view.zoom",
+    "view.zoom100",
+    "view.zoomToSelection",
+    "view.freezePanes",
+    "view.freezeTopRow",
+    "view.freezeFirstColumn",
+    "view.unfreezePanes",
+    "view.gridlines",
+    "view.headings",
+    "view.showZeros",
+    "view.rightToLeft",
+    "formulas.showFormulas",
+    "link.open",
+];
+
+/// Commands that aren't undo steps but change the workbook, or start changing it, so a read-only
+/// workbook refuses them too: undo and redo put back another version of it, Cut starts a move,
+/// Edit Cell starts an entry, Calculate Now and Calculate Sheet replace the results it shows (a
+/// workbook opened with its stored results keeps them), and Record Actions saves a script in it.
+const EDITS_WITHOUT_UNDO: &[&str] =
+    &["edit.undo", "edit.redo", "edit.cut", "edit.beginEdit", "formulas.calculateNow", "formulas.calculateSheet", "automate.recordActions"];
+
 impl CommandSpec {
+    /// Whether the command changes the workbook, or starts changing it, so that a read-only
+    /// workbook refuses it: the undoable commands except those that only change the view, and a
+    /// few that change it without an undo step. A command whose params decide checks for itself:
+    /// Custom Views saves or deletes a view, or shows one; Save and the exports write a copy, or
+    /// the read-only workbook's own file.
+    pub fn edits_workbook(&self) -> bool {
+        if self.undoable { !VIEWING.contains(&self.id) } else { EDITS_WITHOUT_UNDO.contains(&self.id) }
+    }
+
+    /// Whether the command can run now, or why not: a read-only workbook refuses the commands that
+    /// would change it ([`READ_ONLY`]), then the command's own `enabled` check decides.
+    pub fn available(&self, s: &Session) -> std::result::Result<(), String> {
+        if self.edits_workbook() && s.active().is_some_and(|d| d.read_only) {
+            return Err(READ_ONLY.into());
+        }
+        (self.enabled)(s)
+    }
+
     pub fn info(&self, s: &Session) -> CommandInfo {
-        let e = (self.enabled)(s);
+        let e = self.available(s);
         CommandInfo {
             id: self.id,
             label: self.label,
@@ -105,6 +152,12 @@ pub fn can_redo(s: &Session) -> std::result::Result<(), String> {
 pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }
+}
+
+/// Refuses, on a read-only workbook, a change that a command's params ask for (the command
+/// otherwise only reads or shows something, so it isn't refused as a whole).
+pub(crate) fn refuse_read_only(s: &Session, id: &str) -> Result<()> {
+    if s.active().is_some_and(|d| d.read_only) { Err(EngineError::Disabled(id.into(), READ_ONLY.into())) } else { Ok(()) }
 }
 
 macro_rules! cmd {

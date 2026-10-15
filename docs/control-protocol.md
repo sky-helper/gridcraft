@@ -22,7 +22,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable). Passwords (`password`, `…Password` params) are left out, so a replayed Protect Sheet has no password |
-| `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
+| `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels, whether it is open read-only (`readOnly`, `lockReadOnly`) |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
 | `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf |
@@ -84,6 +84,32 @@ it is unrelated to them. In manual calculation mode an edit calculates the formu
 inserting or deleting rows, columns, cells or sheets, sorting, filtering, grouping, hiding rows or
 columns or changing row heights, recalculate the whole workbook in either mode.
 `formulas.calculateNow` (F9) calculates everything.
+
+`{command: "file.open", params: {path: "Approval.xlsx", readOnly: true}}` opens a workbook for
+reading only. Commands that would change it are refused before they do anything or open a dialog,
+with "command `…` is not available right now: the workbook is open read-only", and
+`engine.commands` lists them as disabled with that reason: every command that records an undo step,
+except those that only change the view (zoom, frozen panes, gridlines, headings, zeros,
+right-to-left, Show Formulas) or follow a hyperlink, and also undo and redo, Cut, Edit Cell (F2),
+Calculate Now and Calculate Sheet (the workbook keeps showing the results it opened with), Record
+Actions, and saving or deleting a custom view. Selecting, copying, finding, reading cells, the
+Watch Window, print preview, printing and exporting a PDF work, and what a read-only workbook
+allows is neither an undo step nor an unsaved change. Its file is never written: Save, Save As and
+exports to that path (or the path of any workbook open read-only) are refused, while Save As
+another name and `file.saveBytes` save a copy; the workbook stays read-only. `file.enableEditing`
+turns read-only off (Excel's Enable Editing); it isn't an undo step, and is refused when the
+workbook isn't read-only.
+
+`lockReadOnly: true` opens the workbook read-only for good, for a page that must only show it:
+`file.enableEditing` is refused ("the workbook was opened read-only and can't be switched to
+editing", also its `disabled_reason` in `engine.commands`), so only closing and opening the file
+again makes it editable. It implies `readOnly: true` and can't go with `readOnly: false`.
+
+The result's `readOnly` and `lockReadOnly` say how the workbook opened, `document.inspect` reports
+them, and `view.newWindow` on a read-only workbook opens a read-only window. A path that is already
+open is switched to as it is: the result has its `readOnly` and `lockReadOnly`, and
+`readOnlyIgnored` when `readOnly` or `lockReadOnly` was given. A `readOnly` or `lockReadOnly` that
+isn't true or false is refused before the file is read.
 
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
