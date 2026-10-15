@@ -149,6 +149,9 @@ pub struct GridState {
     pub hscroll: Option<Rect>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// The grid's widget id, as of the last frame it was shown: it has the keyboard when no text
+    /// field does.
+    pub id: Option<egui::Id>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -565,6 +568,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     let resp = ui.allocate_rect(rect, Sense::click_and_drag());
     app.grid.rect = Some(rect);
+    app.grid.id = Some(resp.id);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
     let si = wb.active_sheet;
@@ -2589,6 +2593,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    ask_for_ime(app, ctx, resp, geo, sh);
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -2597,6 +2602,28 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     });
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
     for ev in events {
+        // An input method composing the first character (Hangul, kana, pinyin) starts typing
+        // too. Focusing the cell editor now would interrupt the composition, so the grid keeps
+        // the keyboard and the editor takes the IME events from here until the composition
+        // ends (`EditState::ime_routing`); the events before this one were handled here.
+        if !shortcut_pressed && crate::editor::composes_text(&ev) {
+            app.begin_edit(Some(String::new()), false);
+            if let Some(ed) = app.editor.as_mut() {
+                ed.ime_routing = Some(resp.id);
+                ed.request_focus = false;
+            }
+            ctx.input_mut(|i| {
+                let at = i.events.iter().position(|e| *e == ev).unwrap_or(0);
+                let mut index = 0;
+                i.events.retain(|e| {
+                    let handled = index < at
+                        && matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_));
+                    index += 1;
+                    !handled
+                });
+            });
+            return;
+        }
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -2693,6 +2720,37 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             _ => {}
         }
     }
+}
+
+/// Asks for the IME at the active cell while the grid has the keyboard, so typing in a selected
+/// cell can begin with an input-method composition (Hangul, kana, pinyin): integrations let an
+/// IME compose only while a widget asks for it (eframe's web runner composes in a hidden text
+/// field that it focuses only then). Not with a touch screen or on a phone or tablet, where that
+/// brings up the on-screen keyboard for every tap on a cell, nor while keytips wait for a letter.
+/// egui reports a touch screen from the first touch in the session on: on a touch laptop one touch
+/// scroll turns this off until the app restarts, and iPadOS, which presents itself as a Mac, is
+/// caught by its first tap.
+fn ask_for_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    let touch = ctx.input(|i| i.has_touch_screen()) || matches!(ctx.os(), egui::os::OperatingSystem::Android | egui::os::OperatingSystem::IOS);
+    if touch || app.keytips.prefix().is_some() {
+        return;
+    }
+    let active = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+    let cell = geo.mirror_rect(match sh.merge_at(active) {
+        Some(m) => geo.range_rect(sh, m),
+        None => geo.cell_rect(sh, active),
+    });
+    let to_global = ctx.layer_transform_to_global(resp.layer_id).unwrap_or_default();
+    ctx.output_mut(|o| {
+        o.ime = Some(egui::output::IMEOutput {
+            purpose: egui::IMEPurpose::Normal,
+            // egui-winit places the IME window by `rect`; the web runner by `cursor_rect`, where it
+            // moves its IME text field: where typed text starts.
+            rect: to_global * cell,
+            cursor_rect: to_global * Rect::from_min_max(cell.left_top(), cell.left_bottom()),
+            should_interrupt_composition: false,
+        })
+    });
 }
 
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {

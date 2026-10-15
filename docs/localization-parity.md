@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build; Korean catalog: dialogs, menus and tooltips; the web build shows a CJK interface once added fonts draw it) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build; Korean catalog: dialogs, menus and tooltips; the web build shows a CJK interface once added fonts draw it; an IME composition typed into a selected cell enters it) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -36,8 +36,28 @@ right-to-left sheets and full complex-script support. Part of
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
-  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
-  through egui/winit and is unverified for Chinese, Japanese and Korean.
+  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet.
+- **IME input.** Typing into a selected cell can start with an input-method composition: the
+  grid asks for the IME at the active cell, and the cell editor takes the composition over until
+  it ends. The composition used to be lost: in the web build "가나다" entered nothing and "한글"
+  usually "한" or nothing, depending on whether the cell editor took the focus between
+  syllables. Verified in the web build in headless Chromium with simulated compositions (CDP
+  `Input.imeSetComposition`): Korean "한글" and "가나다" and a Japanese conversion to "日本" land
+  in the cell. Real OS input methods (macOS, Windows, Linux) are unverified. A click elsewhere
+  mid-composition enters the syllable once: Windows delivers it again as a late commit (winit
+  commits the composition when the IME is turned off), which is dropped.
+  Desktop side effects of asking for the IME while only a cell is selected, read from the winit and
+  egui-winit sources (not measured): on macOS winit keeps the Enter or Tab that ends a
+  composition, so entering the cell takes a second press, also after a single syllable; on
+  Windows, keys the IME handles arrive as `Process` and egui-winit drops them, so Space,
+  Shift+Space (select the row), Ctrl+Space (select the column) and Space on a checkbox cell can
+  go to the IME instead, as in Excel while an IME is on; on Linux, IBus and fcitx take Ctrl+Space
+  the same way, and on Wayland the empty pre-edit text winit reports whenever the IME is turned on
+  or off may keep an idle window repainting. The grid doesn't ask for the IME once a touch screen
+  has been used in the session (egui keeps reporting one: on a touch laptop one touch scroll is
+  enough, and iPadOS, which presents itself as a Mac, from its first tap), or on Android/iOS, so a
+  tap on a cell doesn't bring up the on-screen keyboard; there, compose after F2, or on a tablet or
+  phone double-tap the cell or use the formula bar.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -49,16 +69,16 @@ separators, number/date formats, machine translation with agent review, and scri
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
-| Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
+| Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME into a selected cell: tests only (native IMEs unverified); PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
+| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME into a selected cell verified in the web build with a simulated conversion (native IMEs unverified); no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Korean | ko | 973 (~44%) | dialogs and tooltips (dialog bodies take effect as they look up the catalog) | Hangul via the CJK fallback; IME unverified | no | menus, File view, dialogs | 3–6 h |
+| Korean | ko | 973 (~44%) | dialogs and tooltips (dialog bodies take effect as they look up the catalog) | Hangul via the CJK fallback; IME into a selected cell verified in the web build with simulated compositions (native IMEs unverified) | no | menus, File view, dialogs | 3–6 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
@@ -88,6 +108,7 @@ language (none so far) and of localized function names.
 | 2026-10-15 | trivial | A font a host adds that egui can't draw from is refused: no glyph outlines (a file cut off in transfer after its character map would take characters and draw them blank) or no units per em (infinite glyph scale) |
 | 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
 | 2026-10-15 | minor | Korean catalog (`i18n/ko.rs`) grows from 398 to 973 entries (~44%): every key the other catalogs translate, plus three that are looked up through `Language::tr` but were in no catalog (Format Cells' No Color and protection note, the sheet navigator's All sheets); `Size` now reads 크기, so the Format Cells font-size slider no longer says 용지 크기 (paper size). About 230 of the new entries show today (ribbon tooltips and menus, dialog titles and OK/Cancel, Format Cells, the PivotTable Fields pane, cell and header context menus); the rest show once their dialogs, panes and messages look up the catalog |
+| 2026-10-15 | minor | Typing into a selected cell through an IME: the grid asks for the IME at the active cell and the cell editor takes the composition over until it ends. Windows' late commit of a syllable a click already entered is dropped; desktop side effects (macOS second Enter, Windows/Linux IME keys such as Space and Ctrl+Space) listed above. Verified in the web build in headless Chromium with simulated Korean and Japanese compositions; native OS IMEs unverified; off with a touch screen |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

@@ -232,6 +232,9 @@ pub struct SheetApp {
     pub ui: UiState,
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
+    /// An input method's composition the editor stopped following, whose late commit the next
+    /// frames drop (see [`editor::EndedComposition`]).
+    pub ended_composition: Option<editor::EndedComposition>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
@@ -293,6 +296,7 @@ impl SheetApp {
             ui: UiState::default(),
             views: HashMap::new(),
             editor: None,
+            ended_composition: None,
             text_box_editor: None,
             dialog: None,
             backstage: None,
@@ -1014,6 +1018,10 @@ impl SheetApp {
         };
         match r {
             Ok(_) => {
+                // Entered mid-composition (a click elsewhere): the platform may still commit it.
+                if let Some(composed) = ed.composition() {
+                    self.ended_composition = Some(editor::EndedComposition::new(composed));
+                }
                 if dr != 0 || dc != 0 {
                     self.move_after_enter(dr, dc);
                 }
@@ -1030,7 +1038,9 @@ impl SheetApp {
     }
 
     pub fn cancel_edit(&mut self) {
-        self.editor = None;
+        if let Some(composed) = self.editor.take().and_then(|ed| ed.composition()) {
+            self.ended_composition = Some(editor::EndedComposition::new(composed));
+        }
         self.session.mode = gridcraft_engine::Mode::Ready;
     }
 
@@ -1165,6 +1175,11 @@ impl SheetApp {
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Before anything sees this frame's input: the platform's late commit of a composition an
+        // edit already took.
+        if let Some(ended) = self.ended_composition.take() {
+            self.ended_composition = ctx.input_mut(|i| editor::drop_late_commit(ended, &mut i.events));
+        }
         self.poll_printing(&ctx);
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
