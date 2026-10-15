@@ -648,6 +648,17 @@ mod tests {
     }
 
     #[test]
+    fn korean_covers_dialogs_tooltips_and_the_pivot_pane() {
+        // A `context|label` key (the Format Cells Fill tab), a dialog button, a ribbon tooltip that
+        // keeps its shortcut, a two-line ribbon label and the PivotTable Fields pane title.
+        assert_eq!(Language::Ko.tr("Format Cells|Fill"), "채우기");
+        assert_eq!(Language::Ko.tr("OK"), "확인");
+        assert_eq!(Language::Ko.tr("Paste (⌘V)"), "붙여넣기 (⌘V)");
+        assert_eq!(Language::Ko.tr("Workbook\nStatistics"), "통합 문서\n통계");
+        assert_eq!(Language::Ko.tr("PivotTable Fields"), "피벗 테이블 필드");
+    }
+
+    #[test]
     fn unknown_saved_language_keeps_the_other_preferences() {
         let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
         assert!(ui.dark);

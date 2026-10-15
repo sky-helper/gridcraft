@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build; Korean catalog: dialogs, menus and tooltips) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -56,7 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
+| Korean | ko | 973 (~44%) | dialogs and tooltips (dialog bodies take effect as they look up the catalog) | Hangul via the CJK fallback; IME unverified | no | menus, File view, dialogs | 3–6 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
@@ -82,6 +82,7 @@ language (none so far) and of localized function names.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
+| 2026-10-15 | minor | Korean catalog (`i18n/ko.rs`) grows from 398 to 973 entries (~44%): every key the other catalogs translate, plus three that are looked up through `Language::tr` but were in no catalog (Format Cells' No Color and protection note, the sheet navigator's All sheets); `Size` now reads 크기, so the Format Cells font-size slider no longer says 용지 크기 (paper size). About 230 of the new entries show today (ribbon tooltips and menus, dialog titles and OK/Cancel, Format Cells, the PivotTable Fields pane, cell and header context menus); the rest show once their dialogs, panes and messages look up the catalog |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
