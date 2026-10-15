@@ -2,10 +2,16 @@
 //! translated. Untranslated labels fall back to English, so coverage can grow incrementally.
 //!
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
-//! to the system's language ([`Language::system`]), and the View tab switches it by hand.
+//! to the system's language ([`Language::system`]), and the View tab switches it by hand. The web
+//! build saves no preference: it starts in the browser's language, or in the one its page's URL
+//! asks for with `?lang=`.
 //!
 //! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
 //! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
+//! The web build has no system fonts: the page embedding it adds fonts while it runs
+//! ([`crate::theme::add_font`]), and it shows a Chinese, Japanese or Korean interface only once
+//! those fonts draw every East Asian character of the labels ([`interface_text`]), English until
+//! then.
 
 use serde::{Deserialize, Serialize};
 
@@ -157,9 +163,10 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
     ui_json.get("language").and_then(serde_json::Value::as_str).and_then(Language::parse)
 }
 
-/// The interface text in `language`: its own name and its label for every key the catalogs
-/// translate (the Japanese table lists them all; tests hold the other tables to it). What a font
-/// has to draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
+/// The interface text in `language`: its own name and its label for every key of the Japanese
+/// table. Tests hold the catalogs to those keys: every other table translates each of them, and
+/// the Chinese and Korean tables translate no others, so none of their labels is left out. What
+/// a font has to draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
 pub fn interface_text(language: Language) -> impl Iterator<Item = &'static str> {
     std::iter::once(language.name()).chain(JAPANESE.iter().map(move |(key, _)| language.tr(key)))
 }
@@ -734,6 +741,22 @@ mod tests {
         assert!(korean.contains(&"데이터") && korean.contains(&"인터페이스 언어"));
         let english: Vec<&str> = interface_text(Language::En).collect();
         assert!(english.contains(&"Orientation") && !english.iter().any(|label| label.contains('|')), "English shows keys without their context");
+    }
+
+    #[test]
+    fn the_cjk_catalogs_translate_only_the_japanese_keys() {
+        // `interface_text` lists the labels by the Japanese table's keys: a key only the Chinese or
+        // Korean table had would show a label the web build never checks against its fonts.
+        for (name, src) in [("ko", include_str!("i18n/ko.rs")), ("zh", include_str!("i18n/zh.rs"))] {
+            let mut keys = 0;
+            for line in src.lines() {
+                let Some((key, _)) = line.trim().strip_prefix('"').and_then(|l| l.split_once("\" =>")) else { continue };
+                let key = key.replace("\\n", "\n").replace("\\\"", "\"");
+                assert!(JAPANESE.iter().any(|(k, _)| *k == key), "{name}: {key:?} is never checked against the fonts");
+                keys += 1;
+            }
+            assert_eq!(keys, JAPANESE.len(), "{name}: every key was read");
+        }
     }
 
     #[test]

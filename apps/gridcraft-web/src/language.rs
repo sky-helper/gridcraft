@@ -1,7 +1,8 @@
 //! The web build's interface language. The browser gives GridCraft no system fonts and the build
 //! bundles none for Chinese, Japanese or Korean, so an interface in one of those would draw boxes
 //! (tofu) until the host page adds fonts that draw it (`gridcraft:font`, see `host`). Until then
-//! the build shows English; once the added fonts draw every label of that interface it switches.
+//! the build shows English; once the added fonts draw every East Asian character of that
+//! interface's labels it switches (egui's own fonts draw the rest).
 //! No browser types here, so it is tested natively; `web` feeds it the browser's language,
 //! `?lang=` and the fonts added.
 
@@ -20,9 +21,9 @@ pub fn pick(chosen: Option<Language>, requested: Option<Language>, browser: Lang
     if draws(wanted) { wanted } else { Language::En }
 }
 
-/// Whether the fonts added so far draw every label of `language`'s interface: always for the
-/// languages egui's own fonts draw; for Chinese, Japanese and Korean once the added fonts map
-/// every character their labels use (Hangul; Han; kana and Han, with their punctuation).
+/// Whether the fonts added so far draw `language`'s interface: always for the languages egui's own
+/// fonts draw; for Chinese, Japanese and Korean once the added fonts map every East Asian
+/// character their labels use (Hangul; Han; kana and Han, with their punctuation).
 pub fn fonts_draw(language: Language) -> bool {
     theme::extra_fonts_draw(i18n::interface_text(language).flat_map(str::chars))
 }
@@ -166,6 +167,16 @@ mod tests {
         for language in CJK {
             assert!(!fonts_draw(language), "{language:?} with no font added");
         }
+        // A Korean font whose transfer broke off after its character map: it maps the whole Korean
+        // interface but has no outlines to draw it with, so it is refused and a Korean browser
+        // stays in English (with it, the labels' Hangul would draw blank).
+        let cut = theme::add_font("Cut Off", cut_off_after_its_character_map(Language::Ko), 0);
+        assert!(cut.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{cut:?}");
+        assert!(!fonts_draw(Language::Ko));
+        let mut ui = UiState::default();
+        FollowFonts::new(None, Language::Ko).update(&mut ui, theme::extra_font_count(), fonts_draw);
+        assert_eq!(ui.language, Language::En);
+
         let Some((bytes, index, draws_zh_and_ja)) = korean_face() else {
             return; // no Korean face on this machine
         };
@@ -193,7 +204,42 @@ mod tests {
         ];
         candidates.into_iter().find_map(|(path, index, draws_zh_and_ja)| {
             let bytes = std::fs::read(path).ok()?;
-            (bytes.len() <= theme::MAX_EXTRA_FONT).then_some((bytes, index, draws_zh_and_ja))
+            // One too large to add, or that egui can't read, counts as missing.
+            (bytes.len() <= theme::MAX_EXTRA_FONT && theme::font_parses(&bytes, index)).then_some((bytes, index, draws_zh_and_ja))
         })
+    }
+
+    /// The start of a font whose transfer broke off after its character map: a `head` (1,000 units
+    /// per em) and a `cmap` taking every character of `language`'s interface to glyph 1, and none
+    /// of the glyph outlines that come after them in most fonts.
+    fn cut_off_after_its_character_map(language: Language) -> Vec<u8> {
+        let mut chars: Vec<u32> = i18n::interface_text(language).flat_map(str::chars).map(u32::from).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        let groups = u32::try_from(chars.len()).unwrap();
+        // One format 12 subtable (Windows, full Unicode), a group per character.
+        let mut cmap: Vec<u8> = [0_u16, 1, 3, 10].into_iter().flat_map(u16::to_be_bytes).collect();
+        cmap.extend(12_u32.to_be_bytes());
+        cmap.extend([12_u16, 0].into_iter().flat_map(u16::to_be_bytes));
+        cmap.extend([16 + 12 * groups, 0, groups].into_iter().flat_map(u32::to_be_bytes));
+        cmap.extend(chars.into_iter().flat_map(|c| [c, c, 1]).flat_map(u32::to_be_bytes));
+        // Version 1.0, the magic number, units per em.
+        let mut head = vec![0_u8; 54];
+        head[1] = 1;
+        head[12..16].copy_from_slice(&0x5F0F_3CF5_u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1_000_u16.to_be_bytes());
+        // The sfnt header (TrueType, two tables), their records in tag order, then the tables.
+        let mut font: Vec<u8> = 0x0001_0000_u32.to_be_bytes().to_vec();
+        font.extend([2_u16, 32, 1, 0].into_iter().flat_map(u16::to_be_bytes));
+        let mut tables: Vec<u8> = Vec::new();
+        for (tag, table) in [(b"cmap", &cmap), (b"head", &head)] {
+            let offset = u32::try_from(12 + 2 * 16 + tables.len()).unwrap();
+            font.extend(tag);
+            font.extend([0, offset, u32::try_from(table.len()).unwrap()].into_iter().flat_map(u32::to_be_bytes));
+            tables.extend(table);
+            tables.resize(tables.len().next_multiple_of(4), 0);
+        }
+        font.extend(tables);
+        font
     }
 }

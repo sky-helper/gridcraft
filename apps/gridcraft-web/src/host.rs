@@ -16,9 +16,9 @@
 //!   from (no glyph outlines, as in a file cut off in transfer, or no units per em), one over
 //!   64 MiB, or a font past 32 (256 MiB in all). The interface language waits for these fonts: a
 //!   Chinese, Japanese or Korean one (the browser's, or `&lang=` in the page's URL,
-//!   `?host=parent&lang=ko`) shows once the fonts added draw every character of its labels, and
-//!   English until then, unless the user picks a language first (the switch happens in the frame
-//!   after the answer).
+//!   `?host=parent&lang=ko`) shows once the fonts added draw every East Asian character of its
+//!   labels, and English until then, unless the user picks a language first (the switch happens
+//!   in the frame after the answer).
 //! - `gridcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file GridCraft would otherwise download: Save and Save As (an .xlsx workbook) and Export
 //!   as PDF. The parent stores it and reports failures itself.

@@ -199,7 +199,7 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
 /// collection index past the end is rejected instead of crashing the app (#226). A face whose
 /// character map is unreadable (a truncated file) would open but draw nothing, so it is refused
 /// too and the next candidate gets its turn.
-pub(crate) fn font_parses(bytes: &[u8], index: u32) -> bool {
+pub fn font_parses(bytes: &[u8], index: u32) -> bool {
     use skrifa::MetadataProvider;
     skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| font.charmap().has_map())
 }
@@ -1212,6 +1212,54 @@ mod extra_font_tests {
         (out, glyf)
     }
 
+    /// A character map (one format 12 subtable, Windows full Unicode) taking each of `chars` to
+    /// glyph `glyph`.
+    fn cmap_mapping(chars: impl IntoIterator<Item = char>, glyph: u32) -> Vec<u8> {
+        let mut chars: Vec<u32> = chars.into_iter().map(u32::from).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        let groups = u32::try_from(chars.len()).unwrap();
+        // Version 0, one subtable: platform 3, encoding 10, right after this header.
+        let mut cmap: Vec<u8> = [0_u16, 1, 3, 10].into_iter().flat_map(u16::to_be_bytes).collect();
+        cmap.extend(12_u32.to_be_bytes());
+        cmap.extend([12_u16, 0].into_iter().flat_map(u16::to_be_bytes));
+        cmap.extend([16 + 12 * groups, 0, groups].into_iter().flat_map(u32::to_be_bytes));
+        cmap.extend(chars.into_iter().flat_map(|c| [c, c, glyph]).flat_map(u32::to_be_bytes));
+        cmap
+    }
+
+    /// `font` with its character map swapped for `cmap` (added at the end; the old one is left
+    /// there unused). Everything else, outlines included, stays as it was.
+    fn with_cmap(font: &[u8], cmap: &[u8]) -> Vec<u8> {
+        let mut out = font.to_vec();
+        out.resize(out.len().next_multiple_of(4), 0);
+        let (offset, len) = (u32::try_from(out.len()).unwrap(), u32::try_from(cmap.len()).unwrap());
+        for i in 0..table_count(font) {
+            let at = record(i);
+            if &out[at..at + 4] == b"cmap" {
+                out[at + 8..at + 12].copy_from_slice(&offset.to_be_bytes());
+                out[at + 12..at + 16].copy_from_slice(&len.to_be_bytes());
+            }
+        }
+        out.extend_from_slice(cmap);
+        out
+    }
+
+    /// Ubuntu Light's glyph for `A`: a glyph with an outline to map other characters to.
+    fn glyph_a() -> u32 {
+        use skrifa::MetadataProvider;
+        let font = ubuntu();
+        skrifa::FontRef::new(&font).unwrap().charmap().map('A').unwrap().to_u32()
+    }
+
+    /// The East Asian characters of `language`'s interface labels, each once.
+    fn east_asian_labels(language: Language) -> Vec<char> {
+        let mut chars: Vec<char> = crate::i18n::interface_text(language).flat_map(str::chars).filter(|c| east_asian(*c)).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        chars
+    }
+
     /// A Korean face installed on this machine, if any (a minimal machine has none: the checks
     /// that need one are skipped there).
     fn korean_face() -> Option<(Vec<u8>, u32)> {
@@ -1419,6 +1467,36 @@ mod extra_font_tests {
         assert!(fonts_draw(&extra, "데이터 붙여넣기".chars()), "the Korean face, after the Latin one, draws Hangul");
         let korean = crate::i18n::interface_text(crate::i18n::Language::Ko).flat_map(str::chars);
         assert!(fonts_draw(&extra, korean), "and the whole Korean interface");
+    }
+
+    #[test]
+    fn a_font_cut_off_before_its_outlines_draws_no_interface() {
+        // A font whose character map takes every East Asian character of the Korean interface.
+        // Cut off in transfer after its character map, it is refused, so the interface keeps
+        // waiting (in English) rather than switch to labels drawn blank; whole, it draws Korean.
+        let korean = east_asian_labels(Language::Ko);
+        assert!(korean.len() > 100, "the Korean labels use many Hangul syllables");
+        let (whole, glyf) = outlines_last(&with_cmap(&ubuntu(), &cmap_mapping(korean.iter().copied(), glyph_a())));
+        let mut extra = Vec::new();
+        let cut = add_extra(&mut extra, "Korean", whole.get(..glyf + 1_000).unwrap_or_default().to_vec(), 0);
+        assert!(cut.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{cut:?}");
+        assert!(!fonts_draw(&extra, korean.iter().copied()));
+        assert!(add_extra(&mut extra, "Korean", whole, 0).is_ok_and(|a| a.added));
+        assert!(fonts_draw(&extra, korean.iter().copied()), "the whole font draws the Korean interface");
+    }
+
+    #[test]
+    fn covering_the_sample_characters_is_not_drawing_an_interface() {
+        // `covers` comes from a few sample characters of each script; an interface needs every
+        // character of its labels. Ubuntu Light with a character map of just the samples (so on any
+        // machine) covers Hangul, Han and kana, and draws no Chinese, Japanese or Korean interface.
+        let mut extra = Vec::new();
+        let samples = with_cmap(&ubuntu(), &cmap_mapping("가한힣中日本字あんアン".chars(), glyph_a()));
+        let all = Coverage { hangul: true, han: true, kana: true };
+        assert_eq!(add_extra(&mut extra, "Samples", samples, 0), added(all));
+        for language in [Language::Ko, Language::Ja, Language::Zh] {
+            assert!(!fonts_draw(&extra, east_asian_labels(language)), "{language:?}");
+        }
     }
 
     #[test]

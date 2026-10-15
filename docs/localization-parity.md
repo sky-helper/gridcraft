@@ -30,7 +30,7 @@ right-to-left sheets and full complex-script support. Part of
   while the app runs (`app.font.add`, or `gridcraft:font` from a page embedding the web build),
   and every family falls back on them, so CJK text can render there once the page sends a face.
   The web build follows the browser's language, or the page's `?lang=`, into Chinese, Japanese or
-  Korean once the added fonts draw every character of that interface's labels, and shows English
+  Korean once the added fonts draw every East Asian character of its labels, and shows English
   until then; a language picked in the View tab is kept. There is no complex-text shaping: Arabic
   and Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#146):
@@ -83,7 +83,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-15 | minor | Web build: a Chinese, Japanese or Korean browser language, or the page's `?lang=`, is used once the fonts the page added draw every character of that interface's labels (English until then); a language picked by hand is kept |
+| 2026-10-15 | trivial | Web build CJK interface, after review: tests (on any machine) that a font cut off in transfer leaves it in English and that `covers` from sample characters is not the label check; the Chinese and Korean catalogs are held to the Japanese keys the check lists; wording says every East Asian character |
+| 2026-10-15 | minor | Web build: a Chinese, Japanese or Korean browser language, or the page's `?lang=`, is used once the fonts the page added draw every East Asian character of that interface's labels (English until then); a language picked by hand is kept |
 | 2026-10-15 | trivial | A font a host adds that egui can't draw from is refused: no glyph outlines (a file cut off in transfer after its character map would take characters and draw them blank) or no units per em (infinite glyph scale) |
 | 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |

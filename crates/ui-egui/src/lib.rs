@@ -119,6 +119,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Switches the interface to `language` as a pick made in this run (View ▸ Interface
+    /// language, File ▸ Options, an `app.language.*` command), which [`Self::language_chosen`]
+    /// records.
+    pub fn choose_language(&mut self, language: i18n::Language) {
+        self.language = language;
+        self.language_chosen = true;
+    }
+
     pub fn theme_preference(&self) -> egui::ThemePreference {
         if self.system_theme {
             egui::ThemePreference::System
@@ -639,8 +647,7 @@ impl SheetApp {
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
                 match i18n::Language::parse(code) {
                     Some(l) => {
-                        self.ui.language = l;
-                        self.ui.language_chosen = true;
+                        self.ui.choose_language(l);
                         Ok(json!({"language": l}))
                     }
                     None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
@@ -648,13 +655,11 @@ impl SheetApp {
             }
             "app.font.add" => add_font_command(p),
             "app.language.english" => {
-                self.ui.language = i18n::Language::En;
-                self.ui.language_chosen = true;
+                self.ui.choose_language(i18n::Language::En);
                 Ok(json!({"language": i18n::Language::En}))
             }
             "app.language.japanese" => {
-                self.ui.language = i18n::Language::Ja;
-                self.ui.language_chosen = true;
+                self.ui.choose_language(i18n::Language::Ja);
                 Ok(json!({"language": i18n::Language::Ja}))
             }
             "ui.backstage" => {

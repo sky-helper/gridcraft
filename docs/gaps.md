@@ -57,7 +57,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Devanagari; PDF writer uses 14 standard fonts only. The web build has no system fonts: a host
   can now add fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`), so a
   page embedding GridCraft can supply CJK faces, and the web build switches to a CJK interface
-  language (the browser's, or the page's `?lang=`) once those faces draw all of its labels.
+  language (the browser's, or the page's `?lang=`) once those faces draw every East Asian
+  character of its labels.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -171,6 +172,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | §5 wording: the web build's CJK interface waits for fonts that draw every East Asian character of its labels |
 | 2026-10-15 | minor | §5: the web build shows a Chinese, Japanese or Korean interface (the browser's language or the page's `?lang=`) once the fonts the page added draw it |
 | 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
