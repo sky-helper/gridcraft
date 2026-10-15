@@ -4,7 +4,7 @@ use egui::{Color32, FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{EditState, REF_COLORS, formula_refs};
+use crate::editor::{EditState, EndedComposition, REF_COLORS, formula_refs};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -160,8 +160,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     let focused = ui.ctx().memory(|m| m.focused());
     // The keyboard left the grid while the editor took the IME events for it (a click elsewhere
-    // interrupts the composition): what was being composed stays as typed text.
+    // interrupts the composition): what was being composed stays as typed text, and the
+    // platform's late commit of it must not add it again.
     if ed.ime_routing.is_some() && focused != ed.ime_routing {
+        if let Some(composed) = ed.composition() {
+            app.ended_composition = Some(EndedComposition::new(composed));
+        }
         ed.ime_routing = None;
         ed.preedit = None;
     }
@@ -275,6 +279,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.request_focus = true;
         ed.sync_caret = true;
     }
+    // A text field with the keyboard composes by itself; the editor follows (`field_preedit`).
+    if ui.ctx().memory(|m| m.has_focus(id)) {
+        ui.input(|i| ed.follow_field_ime(id, &i.events));
+    }
     // The text widget.
     let refs = formula_refs(&ed.text);
     let text_color = Tokens::get(ui.ctx()).text;
@@ -330,6 +338,15 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         text_changed(app, &mut ed);
+    }
+    // The field that was composing lost the keyboard (a click elsewhere, or the other editor took
+    // it): what it composed stays as typed text, and the platform's late commit of it must not
+    // add it again.
+    if let Some((field, composed)) = &ed.field_preedit
+        && !ui.ctx().memory(|m| m.has_focus(*field))
+    {
+        app.ended_composition = Some(EndedComposition::new(composed.clone()));
+        ed.field_preedit = None;
     }
     if routing {
         ime_at_caret(ui, &output.galley, output.galley_pos, resp.rect, &ed, cell_text_color);
@@ -448,7 +465,7 @@ fn text_changed(app: &mut SheetApp, ed: &mut EditState) {
 /// [`EditState::ime_routing`]): IME events and typed text go into the text, and Escape drops the
 /// text being composed, telling the platform to drop it too, rather than the edit.
 fn take_ime_events(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut EditState) {
-    let (mut changed, mut dropped) = (false, false);
+    let (mut changed, mut dropped) = (false, None);
     ui.input_mut(|i| {
         i.events.retain(|event| match event {
             egui::Event::Ime(ime) => {
@@ -460,14 +477,16 @@ fn take_ime_events(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut EditState) {
                 false
             }
             egui::Event::Key { key: Key::Escape, pressed: true, modifiers, .. } if modifiers.is_none() && ed.preedit.is_some() => {
-                dropped = ed.cancel_preedit();
-                changed |= dropped;
+                dropped = ed.composition();
+                changed |= ed.cancel_preedit();
                 false
             }
             _ => true,
         })
     });
-    if dropped {
+    if let Some(composed) = dropped {
+        // Told to drop it, the platform may commit it instead (see `EndedComposition`).
+        app.ended_composition = Some(EndedComposition::new(composed));
         ui.ctx().memory_mut(|m| m.interrupt_ime());
     }
     if changed {

@@ -51,6 +51,56 @@ pub struct EditState {
     /// The text being composed (the IME's pre-edit text) in `text`, as a char range, while the
     /// editor applies the IME events itself.
     pub preedit: Option<Range<usize>>,
+    /// The text field composing, and its pre-edit text, while a text field applies the IME events
+    /// itself (egui's `TextEdit`): the editor only follows it, to know what the platform may still
+    /// commit when the composition is cut short (see [`EndedComposition`]).
+    pub field_preedit: Option<(egui::Id, String)>,
+}
+
+/// What an input method was composing when the editor stopped following it: a click elsewhere
+/// entered or cancelled the edit, or took the keyboard to another widget, mid-composition.
+///
+/// The edit already holds that text, but on Windows the platform delivers it once more: egui-winit
+/// turns the IME off and on when the focus moves, and winit sends what was being composed as a
+/// commit when that ends the composition (`WM_IME_ENDCOMPOSITION` while composing). Some Linux
+/// input methods commit on focus-out the same way. Arriving a frame or two later, the commit would
+/// start an edit in the cell clicked next, or be typed twice in the field that took the keyboard.
+/// [`drop_late_commit`] drops it, narrowly: one commit of exactly this text, before anything is
+/// composed again, within [`EndedComposition::FRAMES`] frames.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndedComposition {
+    pub text: String,
+    /// Frames left to wait for the late commit.
+    pub frames: u8,
+}
+
+impl EndedComposition {
+    /// How long to wait. Windows delivers the late commit in the next frame or the one after; the
+    /// margin is for slower input methods.
+    pub const FRAMES: u8 = 8;
+
+    pub fn new(text: String) -> EndedComposition {
+        EndedComposition { text, frames: Self::FRAMES }
+    }
+}
+
+/// Removes the late commit of `ended` from this frame's `events` (see [`EndedComposition`]) and
+/// counts the frame. Returns what is still awaited: nothing once the late commit came, something
+/// else was composed or committed, or the time is up.
+pub fn drop_late_commit(mut ended: EndedComposition, events: &mut Vec<egui::Event>) -> Option<EndedComposition> {
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if *text == ended.text => {
+                events.remove(index);
+                return None;
+            }
+            // The input method composes anew: what follows is meant.
+            event if composes_text(event) => return None,
+            _ => {}
+        }
+    }
+    ended.frames = ended.frames.saturating_sub(1);
+    (ended.frames > 0).then_some(ended)
 }
 
 /// An IME event with text to compose or commit: not the empty ones some integrations repeat while
@@ -81,6 +131,34 @@ impl EditState {
             completion: None,
             ime_routing: None,
             preedit: None,
+            field_preedit: None,
+        }
+    }
+
+    /// What the input method is composing in this edit (its pre-edit text), whichever widget
+    /// applies the IME events.
+    pub fn composition(&self) -> Option<String> {
+        match &self.preedit {
+            Some(at) => Some(self.text.chars().skip(at.start).take(at.end.saturating_sub(at.start)).collect()),
+            None => self.field_preedit.as_ref().map(|(_, text)| text.clone()),
+        }
+    }
+
+    /// Follows the composition in text field `field`, which takes these events itself this frame
+    /// as egui's `TextEdit` does: pre-edit text until a commit, empty pre-edit text or typed text
+    /// ends it.
+    pub fn follow_field_ime(&mut self, field: egui::Id, events: &[egui::Event]) {
+        for event in events {
+            match event {
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) | egui::Event::Text(text)
+                    if text == "\n" || text == "\r" => {}
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    self.field_preedit = (!text.is_empty()).then(|| (field, text.clone()));
+                }
+                egui::Event::Ime(egui::ImeEvent::Commit(_)) => self.field_preedit = None,
+                egui::Event::Text(text) if !text.is_empty() => self.field_preedit = None,
+                _ => {}
+            }
         }
     }
 
@@ -462,6 +540,63 @@ mod tests {
         e.caret = 2;
         assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 1 }));
         assert_eq!((e.text.as_str(), e.caret), ("a", 1));
+    }
+
+    #[test]
+    fn composition_followed_in_either_widget() {
+        use egui::{Event, ImeEvent};
+        let preedit = |text: &str| Event::Ime(ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+        let field = egui::Id::new("field");
+        let mut e = EditState::new(0, CellRef::new(0, 0), "가".into(), false, false);
+        assert_eq!(e.composition(), None);
+        // The editor applies the IME events itself (the grid kept the keyboard).
+        e.apply_ime(&ImeEvent::Preedit { text: "한".into(), active_range_chars: None });
+        assert_eq!(e.composition().as_deref(), Some("한"));
+        e.apply_ime(&ImeEvent::Commit("한".into()));
+        assert_eq!(e.composition(), None);
+        // A text field applies them; the editor follows: pre-edit text until a commit, empty
+        // pre-edit text or typed text ends it, as `TextEdit` takes them.
+        e.follow_field_ime(field, &[preedit("ㄱ"), preedit("\n"), preedit("글")]);
+        assert_eq!(e.composition().as_deref(), Some("글"));
+        assert_eq!(e.field_preedit.as_ref().map(|(id, _)| *id), Some(field));
+        for end in [preedit(""), Event::Ime(ImeEvent::Commit("글".into())), Event::Ime(ImeEvent::Commit(String::new())), Event::Text("x".into())] {
+            e.follow_field_ime(field, &[preedit("글"), end.clone()]);
+            assert_eq!(e.composition(), None, "{end:?} ends the composition");
+        }
+        e.follow_field_ime(field, &[preedit("글"), Event::Text(String::new()), Event::Ime(ImeEvent::Commit("\r".into()))]);
+        assert_eq!(e.composition().as_deref(), Some("글"));
+    }
+
+    #[test]
+    fn late_commit_of_an_ended_composition() {
+        use egui::{Event, ImeEvent};
+        let preedit = |text: &str| Event::Ime(ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+        let commit = |text: &str| Event::Ime(ImeEvent::Commit(text.into()));
+        let ended = || EndedComposition::new("한".into());
+        // Windows' late commit: dropped, with the empty pre-edit text before it left alone.
+        let mut events = vec![preedit(""), commit("한"), Event::Text("a".into())];
+        assert_eq!(drop_late_commit(ended(), &mut events), None);
+        assert_eq!(events, vec![preedit(""), Event::Text("a".into())]);
+        // Only once.
+        let mut events = vec![commit("한"), commit("한")];
+        drop_late_commit(ended(), &mut events);
+        assert_eq!(events, vec![commit("한")]);
+        // Composing anew, or other text, ends the wait: the same text after it is typed.
+        for first in [preedit("ㅎ"), commit("가")] {
+            let mut events = vec![first.clone(), commit("한")];
+            assert_eq!(drop_late_commit(ended(), &mut events), None);
+            assert_eq!(events, vec![first, commit("한")]);
+        }
+        // Frames without it count down; empty events don't end the wait.
+        let mut waiting = Some(ended());
+        for frame in 1..EndedComposition::FRAMES {
+            let mut events = vec![preedit(""), commit(""), Event::Text("a".into())];
+            waiting = waiting.and_then(|w| drop_late_commit(w, &mut events));
+            assert_eq!(waiting.as_ref().map(|w| w.frames), Some(EndedComposition::FRAMES - frame));
+            assert_eq!(events.len(), 3);
+        }
+        let mut events = vec![];
+        assert_eq!(waiting.and_then(|w| drop_late_commit(w, &mut events)), None, "the wait is over");
     }
 
     #[test]

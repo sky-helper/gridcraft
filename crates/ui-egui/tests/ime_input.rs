@@ -3,7 +3,10 @@
 //!
 //! The events are what the egui integrations send: `Ime(Preedit)` while composing, `Ime(Commit)`
 //! when a character is final. Events pushed together arrive in one frame, as the integrations
-//! deliver the events of one keystroke.
+//! deliver the events of one keystroke. Where the platforms differ, a test says whose order it
+//! follows: winit (desktop) sends an empty pre-edit before each commit, `[Preedit(""), Commit]`,
+//! and on Windows also delivers the key that completed a syllable right after its commit, while
+//! the web runner sends a commit alone (`compositionend`).
 
 use egui::output::IMEOutput;
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, TouchDeviceId, TouchId, TouchPhase};
@@ -47,6 +50,19 @@ fn press(key: Key) -> [Event; 2] {
 /// One frame with these events.
 fn frame(h: &mut Harness, events: impl IntoIterator<Item = Event>) {
     h.input_mut().events.extend(events);
+    h.step();
+}
+
+fn button(at: Pos2, pressed: bool) -> Event {
+    Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+}
+
+/// A click as winit delivers it: the pointer gets there, then press and release in frames of
+/// their own, and an idle frame.
+fn click(h: &mut Harness, at: Pos2) {
+    frame(h, [Event::PointerMoved(at)]);
+    frame(h, [button(at, true)]);
+    frame(h, [button(at, false)]);
     h.step();
 }
 
@@ -134,7 +150,8 @@ fn hangul_typed_without_pause_stays_one_composition_until_enter() {
     frame(&mut h, [preedit("그")]);
     frame(&mut h, [preedit("글")]);
     assert_composing(&h, "한글");
-    // Enter commits the syllable and the cell at once.
+    // Enter commits the syllable and the cell at once: Windows' order, where the Korean IME
+    // completes the syllable and lets Enter through (macOS keeps that Enter: press it twice).
     let [down, up] = press(Key::Enter);
     frame(&mut h, [preedit(""), commit("글"), down, up]);
     h.step();
@@ -168,7 +185,8 @@ fn text_typed_after_a_composition_follows_it() {
     let mut h = harness("A1");
     frame(&mut h, [preedit("ㅎ")]);
     frame(&mut h, [preedit("한")]);
-    // A space ends the syllable; the editor gets the keyboard and goes on from the caret.
+    // A space ends the syllable and is typed after it (winit's order); the editor gets the
+    // keyboard and goes on from the caret.
     let [down, up] = press(Key::Space);
     frame(&mut h, [preedit(""), commit("한"), down, Event::Text(" ".into()), up]);
     assert_eq!(editing(&h).as_deref(), Some("한 "));
@@ -206,6 +224,9 @@ fn a_japanese_conversion_enters_the_chosen_candidate() {
 
 #[test]
 fn escape_while_composing_drops_only_the_composition() {
+    // The editor's own handling, for a platform or input method that lets the key through: the
+    // web runner and Windows keep Escape for the IME while it composes (the browser marks the
+    // keydown as composing; egui-winit drops keys the IME processed).
     let mut h = harness("A1");
     frame(&mut h, [preedit("ㅎ")]);
     frame(&mut h, [preedit("한")]);
@@ -216,6 +237,9 @@ fn escape_while_composing_drops_only_the_composition() {
     frame(&mut h, press(Key::Escape));
     assert_eq!(editing(&h).as_deref(), Some("한"));
     assert!(ime(&h).should_interrupt_composition);
+    // A platform that commits the composition when told to drop it doesn't bring it back.
+    frame(&mut h, [preedit(""), commit("ㄱ")]);
+    assert_eq!(editing(&h).as_deref(), Some("한"));
     h.step();
     assert!(cell_editor_focused(&h));
     // Escape again cancels the edit: the cell keeps its value.
@@ -240,18 +264,144 @@ fn clicking_another_cell_while_composing_enters_what_was_composed() {
     let mut h = harness("A1");
     frame(&mut h, [preedit("ㅎ")]);
     frame(&mut h, [preedit("한")]);
-    let to: Pos2 = cell_rect(&h, "C4").center();
-    let button = |pressed| Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    frame(&mut h, [Event::PointerMoved(to)]);
-    frame(&mut h, [button(true)]);
-    frame(&mut h, [button(false)]);
-    h.step();
+    let to = cell_rect(&h, "C4").center();
+    click(&mut h, to);
     assert!(h.state().editor.is_none());
     assert_eq!(input(&h, "A1"), "한");
     assert_eq!(active(&h), "C4");
-    // The platform drops its composition: an empty one arriving late starts nothing.
+    // macOS drops the composition silently; Linux input methods may report an empty one late
+    // (and Wayland repeats empty pre-edit text): that starts nothing.
     frame(&mut h, [preedit(""), commit("")]);
     assert!(h.state().editor.is_none());
+}
+
+#[test]
+fn clicking_another_cell_on_the_web_enters_the_composition_once() {
+    // The web runner: the press takes the browser's focus off its IME text field, which ends the
+    // composition (`compositionend`, a commit) before the release, in a frame of its own or in
+    // the release's.
+    for with_release in [false, true] {
+        let mut h = harness("A1");
+        frame(&mut h, [preedit("ㅎ")]);
+        frame(&mut h, [preedit("한")]);
+        let to = cell_rect(&h, "C4").center();
+        frame(&mut h, [Event::PointerMoved(to)]);
+        frame(&mut h, [button(to, true)]);
+        if with_release {
+            frame(&mut h, [commit("한"), button(to, false)]);
+        } else {
+            frame(&mut h, [commit("한")]);
+            frame(&mut h, [button(to, false)]);
+        }
+        h.step();
+        assert!(h.state().editor.is_none(), "editing {:?}", editing(&h));
+        assert_eq!(input(&h, "A1"), "한");
+        assert_eq!(active(&h), "C4");
+    }
+}
+
+#[test]
+fn the_late_commit_of_what_a_click_entered_starts_no_edit() {
+    // Windows: the click turns the IME off (and on again for the next cell), and winit sends what
+    // the IME was composing as a commit when that ends the composition (`WM_IME_ENDCOMPOSITION`
+    // while composing). The click already entered it in A1.
+    let mut h = harness("A1");
+    frame(&mut h, [preedit("ㅎ")]);
+    frame(&mut h, [preedit("한")]);
+    let to = cell_rect(&h, "C4").center();
+    click(&mut h, to);
+    assert_eq!(input(&h, "A1"), "한");
+    assert_eq!(active(&h), "C4");
+    frame(&mut h, [preedit(""), commit("한")]);
+    h.step();
+    assert!(h.state().editor.is_none(), "the late commit started an edit with {:?}", editing(&h));
+    assert_eq!(input(&h, "C4"), "");
+    // The same when the cell editor's text field was composing: after F2 (as before this change,
+    // when the grid ignored IME events) or from the second syllable on.
+    for f2 in [true, false] {
+        let mut h = harness("A1");
+        if f2 {
+            frame(&mut h, press(Key::F2));
+            h.step();
+        } else {
+            frame(&mut h, [preedit("ㅎ")]);
+            frame(&mut h, [preedit(""), commit("한")]);
+            h.step();
+            assert!(cell_editor_focused(&h));
+        }
+        frame(&mut h, [preedit("ㄱ")]);
+        frame(&mut h, [preedit("가")]);
+        let composed = if f2 { "old가" } else { "한가" };
+        assert_eq!(editing(&h).as_deref(), Some(composed));
+        let to = cell_rect(&h, "C4").center();
+        click(&mut h, to);
+        assert_eq!(input(&h, "A1"), composed);
+        frame(&mut h, [preedit(""), commit("가")]);
+        h.step();
+        assert!(h.state().editor.is_none(), "the late commit started an edit with {:?}", editing(&h));
+    }
+}
+
+#[test]
+fn only_the_late_commit_itself_is_dropped() {
+    let composed_then_clicked = || {
+        let mut h = harness("A1");
+        frame(&mut h, [preedit("ㅎ")]);
+        frame(&mut h, [preedit("한")]);
+        let to = cell_rect(&h, "C4").center();
+        click(&mut h, to);
+        h
+    };
+    // Without a late commit (macOS, the web), the next composition starts as usual, also of the
+    // same syllable: it starts with pre-edit text.
+    let mut h = composed_then_clicked();
+    frame(&mut h, [preedit("ㅎ")]);
+    assert_composing(&h, "ㅎ");
+    frame(&mut h, [preedit("한")]);
+    frame(&mut h, [preedit(""), commit("한")]);
+    frame(&mut h, press(Key::Enter));
+    h.step();
+    assert_eq!(input(&h, "C4"), "한");
+    // Other text committed straight away.
+    let mut h = composed_then_clicked();
+    frame(&mut h, [commit("가")]);
+    assert_eq!(editing(&h).as_deref(), Some("가"));
+    // The same text once the platform's moment has passed.
+    let mut h = composed_then_clicked();
+    h.run_steps(20);
+    frame(&mut h, [commit("한")]);
+    assert_eq!(editing(&h).as_deref(), Some("한"));
+}
+
+#[test]
+fn moving_to_the_formula_bar_while_composing_keeps_the_syllable_once() {
+    // A click in the formula bar takes the keyboard from the grid mid-composition: what was
+    // composed stays as typed text, and editing goes on there. Windows' late commit of it (see
+    // above) must not add it again. The same from the cell editor's text field after F2.
+    for f2 in [false, true] {
+        let mut h = harness("A1");
+        if f2 {
+            frame(&mut h, press(Key::F2));
+            h.step();
+        }
+        frame(&mut h, [preedit("ㅎ")]);
+        frame(&mut h, [preedit("한")]);
+        let composed = if f2 { "old한" } else { "한" };
+        assert_eq!(editing(&h).as_deref(), Some(composed));
+        let bar = Id::new("gridcraft.formula_bar");
+        let field = h.ctx.read_response(bar).expect("the formula bar shows the edit").rect;
+        click(&mut h, field.right_center() - egui::vec2(8.0, 0.0));
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(bar));
+        assert_eq!(editing(&h).as_deref(), Some(composed));
+        frame(&mut h, [preedit(""), commit("한")]);
+        h.step();
+        assert_eq!(editing(&h).as_deref(), Some(composed), "the late commit was typed again");
+        frame(&mut h, [Event::Text("x".into())]);
+        assert_eq!(editing(&h).as_deref(), Some(format!("{composed}x").as_str()));
+        frame(&mut h, press(Key::Enter));
+        h.step();
+        assert_eq!(input(&h, "A1"), format!("{composed}x"));
+    }
 }
 
 #[test]
