@@ -276,6 +276,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.edit.begin" => {
             app.begin_edit(s("text").map(str::to_string), false);
+            // A read-only workbook opens no editor: say so, as the engine does for its commands.
+            if app.editor.is_none() && app.read_only() {
+                return err(gridcraft_engine::EngineError::Disabled(method.into(), gridcraft_engine::cmd::READ_ONLY.into()));
+            }
             ok(Json::Null)
         }
         "ui.edit.text" => match app.editor.as_mut() {
@@ -359,7 +363,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
-        "ui.screenshot" => return Outcome::Screenshot { path: s("path").map(str::to_string) },
+        "ui.screenshot" => {
+            // A read-only workbook's file is never written over, by a screenshot either.
+            if let Some(path) = s("path")
+                && let Err(e) = gridcraft_engine::cmd::file::refuse_read_only_file(&app.session, method, path)
+            {
+                return err(e);
+            }
+            return Outcome::Screenshot { path: s("path").map(str::to_string) };
+        }
         "app.open" => {
             let Some(path) = s("path") else { return err("missing `path`") };
             // Not `open_path`: that asks for a missing password in a dialog, and programmatic

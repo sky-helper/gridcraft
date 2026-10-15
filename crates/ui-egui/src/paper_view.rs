@@ -835,6 +835,10 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
         let Some((edge, page)) = edge_at(geo, pg, origin, h) else { continue };
         let value = current.get(edge.index()).copied().unwrap_or(0.5);
         if resp.drag_started() {
+            // Dragging a margin sets it on release: not on a read-only workbook.
+            if app.refuse_read_only() {
+                return;
+            }
             app.grid.ruler_drag = Some(RulerDrag { sheet: si, edge, page, start_inches: value, inches: value, preview: None });
             cursor(ui, edge);
         } else if resp.hovered() {
