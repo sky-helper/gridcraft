@@ -186,16 +186,19 @@ impl EditState {
                 true
             }
             egui::ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
+                // `preedit` and `caret` are public: a range given backwards or past the text
+                // counts as the chars it covers.
                 let len = self.text.chars().count();
-                let (start, end) = (at.start.min(len), at.end.min(len));
+                let end = at.end.min(len);
+                let start = at.start.min(end);
                 let (before, after) = (start.saturating_sub(*before_chars), end.saturating_add(*after_chars).min(len));
                 if (before, after) == (start, end) {
                     return false;
                 }
                 self.splice(end..after, "");
                 self.splice(before..start, "");
-                let shift = start - before;
-                self.preedit = self.preedit.as_ref().map(|_| before..end - shift);
+                let shift = start.saturating_sub(before);
+                self.preedit = self.preedit.as_ref().map(|_| before..end.saturating_sub(shift));
                 self.caret = self.caret.min(len).saturating_sub(shift);
                 true
             }
@@ -524,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)] // backwards on purpose: the fields are public
     fn ime_delete_surrounding() {
         use egui::ImeEvent;
         // A phone keyboard rewrites the last syllable: delete it, then compose its replacement.
@@ -540,6 +544,22 @@ mod tests {
         e.caret = 2;
         assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 1 }));
         assert_eq!((e.text.as_str(), e.caret), ("a", 1));
+        // The fields are public: a composition range given backwards or past the text, and huge
+        // counts, edit what they cover and never panic.
+        let mut e = EditState::new(0, CellRef::new(0, 0), "가나다".into(), true, false);
+        e.preedit = Some(3..0);
+        assert!(!e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 3, after_chars: 0 }));
+        e.preedit = Some(9..2);
+        assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: usize::MAX, after_chars: usize::MAX }));
+        assert_eq!((e.text.as_str(), e.preedit.clone()), ("", Some(0..0)));
+        for (event, after) in [(ImeEvent::Preedit { text: "라".into(), active_range_chars: None }, "가라"), (ImeEvent::Commit("마".into()), "가마")]
+        {
+            let mut e = EditState::new(0, CellRef::new(0, 0), "가".into(), true, false);
+            e.preedit = Some(7..4);
+            e.caret = 99;
+            assert!(e.apply_ime(&event));
+            assert_eq!(e.text, after);
+        }
     }
 
     #[test]

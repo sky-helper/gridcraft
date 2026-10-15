@@ -149,6 +149,9 @@ pub struct GridState {
     pub hscroll: Option<Rect>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// The grid's widget id, as of the last frame it was shown: it has the keyboard when no text
+    /// field does.
+    pub id: Option<egui::Id>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -565,6 +568,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     let resp = ui.allocate_rect(rect, Sense::click_and_drag());
     app.grid.rect = Some(rect);
+    app.grid.id = Some(resp.id);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
     let si = wb.active_sheet;
@@ -2717,6 +2721,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
 /// IME compose only while a widget asks for it (eframe's web runner composes in a hidden text
 /// field that it focuses only then). Not with a touch screen or on a phone or tablet, where that
 /// brings up the on-screen keyboard for every tap on a cell, nor while keytips wait for a letter.
+/// egui reports a touch screen from the first touch in the session on: on a touch laptop one touch
+/// scroll turns this off until the app restarts, and iPadOS, which presents itself as a Mac, is
+/// caught by its first tap.
 fn ask_for_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     let touch = ctx.input(|i| i.has_touch_screen()) || matches!(ctx.os(), egui::os::OperatingSystem::Android | egui::os::OperatingSystem::IOS);
     if touch || app.keytips.prefix().is_some() {
@@ -2731,8 +2738,9 @@ fn ask_for_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: 
     ctx.output_mut(|o| {
         o.ime = Some(egui::output::IMEOutput {
             purpose: egui::IMEPurpose::Normal,
+            // egui-winit places the IME window by `rect`; the web runner by `cursor_rect`, where it
+            // moves its IME text field: where typed text starts.
             rect: to_global * cell,
-            // Where typed text starts, for the IME window.
             cursor_rect: to_global * Rect::from_min_max(cell.left_top(), cell.left_bottom()),
             should_interrupt_composition: false,
         })

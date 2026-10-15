@@ -273,11 +273,19 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
     }
     // The composition ended: the text field takes the keyboard (focusing it interrupts nothing
-    // now) and edits on from the caret.
-    if routing && ed.preedit.is_none() && action.is_none() && !cancel {
+    // now) and edits on from the caret. It takes it before it runs, so that it also gets the rest
+    // of this frame's input: a paste or a key that came with the commit (Cmd+V on the web commits
+    // the composition first; on Windows a key the IME doesn't keep, such as Home, comes right
+    // after the commit it caused).
+    let handoff = routing && ed.preedit.is_none() && action.is_none() && !cancel;
+    if handoff {
         ed.ime_routing = None;
-        ed.request_focus = true;
-        ed.sync_caret = true;
+        ed.request_focus = false;
+        ed.sync_caret = false;
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(ed.caret))));
+        state.store(ui.ctx(), id);
+        ui.ctx().memory_mut(|m| m.request_focus(id));
     }
     // A text field with the keyboard composes by itself; the editor follows (`field_preedit`).
     if ui.ctx().memory(|m| m.has_focus(id)) {
@@ -327,7 +335,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         let cursor = egui::text::CCursor::new(ed.caret);
         output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
         output.state.store(ui.ctx(), id);
-    } else if resp.clicked() || resp.gained_focus() {
+    } else if !handoff && (resp.clicked() || resp.gained_focus()) {
         // Clicking into the other editor moves editing there.
         ed.from_formula_bar = id == egui::Id::new("gridcraft.formula_bar");
         ed.enter_mode = false;
@@ -426,11 +434,21 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             });
         });
     }
+    let had_keyboard = ui.ctx().memory(|m| m.has_focus(id));
     app.editor = Some(ed);
     if cancel {
         app.cancel_edit();
     } else if let Some((dr, dc, array, fill)) = action {
         app.commit_edit(dr, dc, array, fill);
+    }
+    // The edit ended from this field: the grid takes the keyboard back now, while nothing is being
+    // composed, rather than in the next frame, where a composition for the next cell may already be
+    // starting (taking the focus would interrupt it).
+    if had_keyboard
+        && app.editor.is_none()
+        && let Some(grid) = app.grid.id
+    {
+        ui.ctx().memory_mut(|m| m.request_focus(grid));
     }
 }
 
@@ -494,8 +512,9 @@ fn take_ime_events(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut EditState) {
     }
 }
 
-/// While the grid keeps the keyboard for a composition: the IME goes to the editor's caret (the
-/// integration puts the IME window there), and the text being composed is underlined.
+/// While the grid keeps the keyboard for a composition: the IME goes to the editor, as for egui's
+/// `TextEdit` (egui-winit places the IME window by the editor's rect, the web runner at the caret,
+/// where it moves its IME text field), and the text being composed is underlined.
 fn ime_at_caret(ui: &egui::Ui, galley: &egui::Galley, galley_pos: egui::Pos2, rect: Rect, ed: &EditState, color: Color32) {
     let origin = galley_pos.to_vec2() - vec2(galley.rect.left(), 0.0);
     let at = |index| galley.pos_from_cursor(egui::text::CCursor::new(index)).translate(origin);

@@ -405,6 +405,59 @@ fn moving_to_the_formula_bar_while_composing_keeps_the_syllable_once() {
 }
 
 #[test]
+fn a_paste_or_key_in_the_frame_the_composition_ends_is_kept() {
+    // Web: Cmd+V while composing commits the composition, then the paste event comes. The text
+    // field takes the keyboard in this frame; it still gets the paste.
+    let mut h = harness("A1");
+    frame(&mut h, [preedit("ㅎ")]);
+    frame(&mut h, [preedit("한")]);
+    frame(&mut h, [preedit(""), commit("한"), Event::Paste("x".into())]);
+    h.step();
+    assert_eq!(editing(&h).as_deref(), Some("한x"));
+    // Lines pasted into the cell's one-line field join with spaces, as the field does.
+    frame(&mut h, [preedit("ㄱ")]);
+    frame(&mut h, [preedit(""), commit("ㄱ"), Event::Paste("y\nz".into())]);
+    h.step();
+    assert_eq!(editing(&h).as_deref(), Some("한xㄱy z"));
+    // Windows: a key the IME doesn't keep (Home here) completes the syllable and comes right
+    // after its commit.
+    let mut h = harness("A1");
+    frame(&mut h, [preedit("ㅎ")]);
+    frame(&mut h, [preedit("한")]);
+    let [down, up] = press(Key::Home);
+    frame(&mut h, [preedit(""), commit("한"), down, up]);
+    frame(&mut h, [Event::Text("x".into())]);
+    assert_eq!(editing(&h).as_deref(), Some("x한"));
+}
+
+#[test]
+fn a_composition_starting_right_after_enter_is_not_interrupted() {
+    // The first syllable for the next cell can come in the frame right after Enter closed the
+    // editor, with no idle frame between (a busy machine): taking the keyboard back from the
+    // closed editor must not interrupt it.
+    let mut h = harness("A1");
+    frame(&mut h, [Event::Text("a".into())]);
+    h.step();
+    frame(&mut h, press(Key::Enter));
+    assert!(h.state().editor.is_none());
+    frame(&mut h, [preedit("ㅎ")]);
+    assert_composing(&h, "ㅎ");
+    frame(&mut h, [preedit("한")]);
+    frame(&mut h, [preedit(""), commit("한")]);
+    frame(&mut h, press(Key::Enter));
+    h.step();
+    assert_eq!(input(&h, "A1"), "a");
+    assert_eq!(input(&h, "A2"), "한");
+    // The same after Escape cancelled an edit.
+    frame(&mut h, [Event::Text("b".into())]);
+    h.step();
+    frame(&mut h, press(Key::Escape));
+    assert!(h.state().editor.is_none());
+    frame(&mut h, [preedit("ㄱ")]);
+    assert_composing(&h, "ㄱ");
+}
+
+#[test]
 fn an_empty_ime_event_leaves_keytips_open() {
     // Wayland: winit sends empty pre-edit text on each text-input `done`, also when the IME is
     // turned off, as it is when keytips open (the grid stops asking for it).
@@ -430,11 +483,11 @@ fn typing_arrows_shortcuts_and_f2_are_unchanged() {
     assert_eq!(editing(&h).as_deref(), Some("abc"));
     assert!(cell_editor_focused(&h));
     frame(&mut h, press(Key::Enter));
-    h.step();
     assert_eq!(input(&h, "C3"), "abc");
     assert_eq!(active(&h), "C4");
-    // The grid takes the keyboard back from the closed editor and locks the arrows to itself a
-    // frame later; an arrow in between would also move egui's focus off the grid.
+    // The grid takes the keyboard back as Enter closes the editor and locks the arrows to itself
+    // in the next frame, the one egui runs after any input; an arrow in that very frame would
+    // still move egui's focus off the grid.
     h.step();
     frame(&mut h, press(Key::ArrowUp));
     h.step();

@@ -38,9 +38,21 @@ right-to-left sheets and full complex-script support. Part of
   usually "한" or nothing, depending on whether the cell editor took the focus between
   syllables. Verified in the web build in headless Chromium with simulated compositions (CDP
   `Input.imeSetComposition`): Korean "한글" and "가나다" and a Japanese conversion to "日本" land
-  in the cell. Real OS input methods (macOS, Windows, Linux) are unverified. The grid doesn't ask
-  for the IME once a touch screen has been used, or on Android/iOS, so a tap on a cell doesn't
-  bring up the on-screen keyboard; there, compose after F2.
+  in the cell. Real OS input methods (macOS, Windows, Linux) are unverified. A click elsewhere
+  mid-composition enters the syllable once: Windows delivers it again as a late commit (winit
+  commits the composition when the IME is turned off), which is dropped.
+  Desktop side effects of asking for the IME while only a cell is selected, read from the winit and
+  egui-winit sources (not measured): on macOS winit keeps the Enter or Tab that ends a
+  composition, so entering the cell takes a second press, also after a single syllable; on
+  Windows, keys the IME handles arrive as `Process` and egui-winit drops them, so Space,
+  Shift+Space (select the row), Ctrl+Space (select the column) and Space on a checkbox cell can
+  go to the IME instead, as in Excel while an IME is on; on Linux, IBus and fcitx take Ctrl+Space
+  the same way, and on Wayland the empty pre-edit text winit reports whenever the IME is turned on
+  or off may keep an idle window repainting. The grid doesn't ask for the IME once a touch screen
+  has been used in the session (egui keeps reporting one: on a touch laptop one touch scroll is
+  enough, and iPadOS, which presents itself as a Mac, from its first tap), or on Android/iOS, so a
+  tap on a cell doesn't bring up the on-screen keyboard; there, compose after F2, or on a tablet or
+  phone double-tap the cell or use the formula bar.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -86,7 +98,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-15 | minor | Typing into a selected cell through an IME: the grid asks for the IME at the active cell and the cell editor takes the composition over until it ends. Verified in the web build in headless Chromium with simulated Korean and Japanese compositions; native OS IMEs unverified; off with a touch screen |
+| 2026-10-15 | minor | Typing into a selected cell through an IME: the grid asks for the IME at the active cell and the cell editor takes the composition over until it ends. Windows' late commit of a syllable a click already entered is dropped; desktop side effects (macOS second Enter, Windows/Linux IME keys such as Space and Ctrl+Space) listed above. Verified in the web build in headless Chromium with simulated Korean and Japanese compositions; native OS IMEs unverified; off with a touch screen |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
