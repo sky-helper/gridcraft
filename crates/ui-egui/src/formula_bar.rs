@@ -4,7 +4,7 @@ use egui::{Color32, FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{REF_COLORS, formula_refs};
+use crate::editor::{EditState, REF_COLORS, formula_refs};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -158,9 +158,21 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
     let Some(mut ed) = app.editor.take() else { return };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
-    // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
-    let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
+    // The keyboard left the grid while the editor took the IME events for it (a click elsewhere
+    // interrupts the composition): what was being composed stays as typed text.
+    if ed.ime_routing.is_some() && focused != ed.ime_routing {
+        ed.ime_routing = None;
+        ed.preedit = None;
+    }
+    // An IME composition started this edit and the grid still has the keyboard: the editor
+    // takes the composition (and any typed text) from the grid until it ends.
+    let routing = mine && ed.ime_routing.is_some();
+    if routing {
+        take_ime_events(app, ui, &mut ed);
+    }
+    // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
+    let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none() || routing));
     let mut action: Option<(i64, i64, bool, bool)> = None;
     let mut cancel = false;
     if has_focus && mine {
@@ -256,6 +268,13 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             cycle_anchor(&mut ed);
         }
     }
+    // The composition ended: the text field takes the keyboard (focusing it interrupts nothing
+    // now) and edits on from the caret.
+    if routing && ed.preedit.is_none() && action.is_none() && !cancel {
+        ed.ime_routing = None;
+        ed.request_focus = true;
+        ed.sync_caret = true;
+    }
     // The text widget.
     let refs = formula_refs(&ed.text);
     let text_color = Tokens::get(ui.ctx()).text;
@@ -310,29 +329,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.caret = r.primary.index.into();
     }
     if resp.changed() {
-        ed.completion = None;
-        if app.ui.autocomplete
-            && !ed.is_formula()
-            && ed.caret == ed.text.chars().count()
-            && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))
-        {
-            ed.completion = crate::editor::column_completion(sh, ed.cell, &ed.text);
-        }
-        ed.point = None;
-        let names: Vec<String> = function_names()
-            .iter()
-            .map(|name| {
-                app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
-            })
-            .collect();
-        ed.update_autocomplete(&names);
-        app.session.mode = if ed.can_point() {
-            gridcraft_engine::Mode::Point
-        } else if ed.enter_mode {
-            gridcraft_engine::Mode::Enter
-        } else {
-            gridcraft_engine::Mode::Edit
-        };
+        text_changed(app, &mut ed);
+    }
+    if routing {
+        ime_at_caret(ui, &output.galley, output.galley_pos, resp.rect, &ed, cell_text_color);
     }
     // Column AutoComplete: the rest of the suggested entry, shown selected after the caret.
     if let Some(full) = &ed.completion
@@ -414,6 +414,86 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         app.cancel_edit();
     } else if let Some((dr, dc, array, fill)) = action {
         app.commit_edit(dr, dc, array, fill);
+    }
+}
+
+/// After the text changed: column AutoComplete, function suggestions and the mode follow it.
+fn text_changed(app: &mut SheetApp, ed: &mut EditState) {
+    ed.completion = None;
+    if app.ui.autocomplete
+        && !ed.is_formula()
+        && ed.caret == ed.text.chars().count()
+        && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))
+    {
+        ed.completion = crate::editor::column_completion(sh, ed.cell, &ed.text);
+    }
+    ed.point = None;
+    let names: Vec<String> = function_names()
+        .iter()
+        .map(|name| {
+            app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
+        })
+        .collect();
+    ed.update_autocomplete(&names);
+    app.session.mode = if ed.can_point() {
+        gridcraft_engine::Mode::Point
+    } else if ed.enter_mode {
+        gridcraft_engine::Mode::Enter
+    } else {
+        gridcraft_engine::Mode::Edit
+    };
+}
+
+/// The editor's share of the grid's keyboard while an IME composition goes on (see
+/// [`EditState::ime_routing`]): IME events and typed text go into the text, and Escape drops the
+/// text being composed, telling the platform to drop it too, rather than the edit.
+fn take_ime_events(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut EditState) {
+    let (mut changed, mut dropped) = (false, false);
+    ui.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Ime(ime) => {
+                changed |= ed.apply_ime(ime);
+                false
+            }
+            egui::Event::Text(text) => {
+                changed |= ed.insert_typed(text);
+                false
+            }
+            egui::Event::Key { key: Key::Escape, pressed: true, modifiers, .. } if modifiers.is_none() && ed.preedit.is_some() => {
+                dropped = ed.cancel_preedit();
+                changed |= dropped;
+                false
+            }
+            _ => true,
+        })
+    });
+    if dropped {
+        ui.ctx().memory_mut(|m| m.interrupt_ime());
+    }
+    if changed {
+        text_changed(app, ed);
+    }
+}
+
+/// While the grid keeps the keyboard for a composition: the IME goes to the editor's caret (the
+/// integration puts the IME window there), and the text being composed is underlined.
+fn ime_at_caret(ui: &egui::Ui, galley: &egui::Galley, galley_pos: egui::Pos2, rect: Rect, ed: &EditState, color: Color32) {
+    let origin = galley_pos.to_vec2() - vec2(galley.rect.left(), 0.0);
+    let at = |index| galley.pos_from_cursor(egui::text::CCursor::new(index)).translate(origin);
+    let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
+    ui.output_mut(|o| {
+        o.ime = Some(egui::output::IMEOutput {
+            purpose: egui::IMEPurpose::Normal,
+            rect: to_global * rect,
+            cursor_rect: to_global * at(ed.caret),
+            should_interrupt_composition: false,
+        })
+    });
+    if let Some(composed) = &ed.preedit {
+        let (start, end) = (at(composed.start), at(composed.end));
+        if (start.top() - end.top()).abs() < 0.5 {
+            ui.painter().hline(start.left()..=end.left(), start.bottom(), Stroke::new(1.0, color));
+        }
     }
 }
 

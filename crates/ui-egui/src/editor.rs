@@ -1,6 +1,8 @@
 //! In-cell / formula-bar editing state: point mode, reference colouring, function
 //! autocomplete and argument hints.
 
+use std::ops::Range;
+
 use egui::Color32;
 use gridcraft_engine::core::{CellRef, RangeRef};
 
@@ -41,6 +43,14 @@ pub struct EditState {
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// The edit began with an input-method composition while only the cell was selected, and
+    /// this widget (the grid) keeps the keyboard until the composition ends: focusing the text
+    /// field would interrupt it. Meanwhile the editor applies the IME events itself
+    /// (`formula_bar::editor_widget`), then hands the keyboard to the text field.
+    pub ime_routing: Option<egui::Id>,
+    /// The text being composed (the IME's pre-edit text) in `text`, as a char range, while the
+    /// editor applies the IME events itself.
+    pub preedit: Option<Range<usize>>,
 }
 
 impl EditState {
@@ -62,7 +72,82 @@ impl EditState {
             sync_caret: true,
             caret_to_end: true,
             completion: None,
+            ime_routing: None,
+            preedit: None,
         }
+    }
+
+    /// Applies an IME event the way egui's `TextEdit` does: pre-edit text replaces the previous
+    /// pre-edit text at the caret, a commit replaces it for good. Empty events while nothing is
+    /// being composed (some integrations repeat them) and newlines (Enter's job) change nothing.
+    /// Returns whether the text changed.
+    pub fn apply_ime(&mut self, event: &egui::ImeEvent) -> bool {
+        let at = self.preedit.clone().unwrap_or(self.caret..self.caret);
+        match event {
+            egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)
+                if (text.is_empty() && self.preedit.is_none()) || text == "\n" || text == "\r" =>
+            {
+                false
+            }
+            egui::ImeEvent::Preedit { text, .. } => {
+                let composed = self.splice(at, text);
+                self.caret = composed.end;
+                self.preedit = (!composed.is_empty()).then_some(composed);
+                true
+            }
+            egui::ImeEvent::Commit(text) => {
+                self.caret = self.splice(at, text).end;
+                self.preedit = None;
+                true
+            }
+            egui::ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
+                let len = self.text.chars().count();
+                let (start, end) = (at.start.min(len), at.end.min(len));
+                let (before, after) = (start.saturating_sub(*before_chars), end.saturating_add(*after_chars).min(len));
+                if (before, after) == (start, end) {
+                    return false;
+                }
+                self.splice(end..after, "");
+                self.splice(before..start, "");
+                let shift = start - before;
+                self.preedit = self.preedit.as_ref().map(|_| before..end - shift);
+                self.caret = self.caret.min(len).saturating_sub(shift);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Typed text (not from the IME) at the caret: it replaces the pre-edit text, as `TextEdit`
+    /// replaces its selection. Returns whether the text changed.
+    pub fn insert_typed(&mut self, typed: &str) -> bool {
+        if typed.is_empty() || typed == "\n" || typed == "\r" {
+            return false;
+        }
+        let at = self.preedit.take().unwrap_or(self.caret..self.caret);
+        self.caret = self.splice(at, typed).end;
+        true
+    }
+
+    /// Drops the text being composed (the composition was cancelled). Returns whether there was any.
+    pub fn cancel_preedit(&mut self) -> bool {
+        let Some(at) = self.preedit.take() else { return false };
+        self.caret = self.splice(at, "").start;
+        true
+    }
+
+    /// Byte offset of char `index`, or the end of the text.
+    fn byte_at(&self, index: usize) -> usize {
+        self.text.char_indices().nth(index).map(|(b, _)| b).unwrap_or(self.text.len())
+    }
+
+    /// Replaces the chars in `range` (clamped to the text) with `with`; the char range it now takes.
+    fn splice(&mut self, range: Range<usize>, with: &str) -> Range<usize> {
+        let (start, end) = (self.byte_at(range.start), self.byte_at(range.end.max(range.start)));
+        let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(end..)) else { return self.caret..self.caret };
+        let at = a.chars().count();
+        self.text = format!("{a}{with}{b}");
+        at..at + with.chars().count()
     }
 
     pub fn is_formula(&self) -> bool {
@@ -319,6 +404,57 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn ime_composition() {
+        use egui::ImeEvent;
+        let preedit = |text: &str| ImeEvent::Preedit { text: text.into(), active_range_chars: None };
+        let mut e = EditState::new(0, CellRef::new(0, 0), String::new(), true, false);
+        let state = |e: &EditState| (e.text.clone(), e.preedit.clone(), e.caret);
+        // Pre-edit text replaces the previous pre-edit text; a commit makes it final.
+        for text in ["ㅎ", "하", "한"] {
+            assert!(e.apply_ime(&preedit(text)));
+            assert_eq!(state(&e), (text.to_string(), Some(0..1), 1));
+        }
+        assert!(e.apply_ime(&ImeEvent::Commit("한".into())));
+        assert!(e.apply_ime(&preedit("ㄱ")));
+        assert_eq!(state(&e), ("한ㄱ".into(), Some(1..2), 2));
+        // Empty pre-edit text ends the composition without a commit.
+        assert!(e.apply_ime(&preedit("")));
+        assert_eq!(state(&e), ("한".into(), None, 1));
+        // Nothing composed: empty events (repeated by some integrations) and newlines change nothing.
+        for event in [preedit(""), ImeEvent::Commit(String::new()), ImeEvent::Commit("\n".into()), preedit("\r")] {
+            assert!(!e.apply_ime(&event));
+        }
+        assert_eq!(state(&e), ("한".into(), None, 1));
+        // Typed text and cancelling replace or drop only the pre-edit text.
+        e.apply_ime(&preedit("ㄱ"));
+        assert!(e.insert_typed(" "));
+        assert_eq!(state(&e), ("한 ".into(), None, 2));
+        e.apply_ime(&preedit("글"));
+        assert!(e.cancel_preedit());
+        assert!(!e.cancel_preedit());
+        assert_eq!(state(&e), ("한 ".into(), None, 2));
+    }
+
+    #[test]
+    fn ime_delete_surrounding() {
+        use egui::ImeEvent;
+        // A phone keyboard rewrites the last syllable: delete it, then compose its replacement.
+        let mut e = EditState::new(0, CellRef::new(0, 0), "가나".into(), true, false);
+        assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }));
+        assert_eq!((e.text.as_str(), e.caret), ("가", 1));
+        e.apply_ime(&ImeEvent::Preedit { text: "낙".into(), active_range_chars: None });
+        // Around a composition, deleting counts from its ends and keeps it whole.
+        assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 5, after_chars: 5 }));
+        assert_eq!((e.text.as_str(), e.preedit.clone(), e.caret), ("낙", Some(0..1), 1));
+        assert!(!e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 0 }));
+        // Emoji and other multi-byte characters count as one each.
+        let mut e = EditState::new(0, CellRef::new(0, 0), "a😀b".into(), true, false);
+        e.caret = 2;
+        assert!(e.apply_ime(&ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 1 }));
+        assert_eq!((e.text.as_str(), e.caret), ("a", 1));
     }
 
     #[test]
