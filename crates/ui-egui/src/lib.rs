@@ -71,6 +71,12 @@ pub struct UiState {
     /// rather than failing the whole `UiState`.
     #[serde(deserialize_with = "i18n::lenient")]
     pub language: i18n::Language,
+    /// Whether the interface language was picked in this run (View ▸ Interface language,
+    /// File ▸ Options, an `app.language.*` command); never saved. The web build switches to a
+    /// Chinese, Japanese or Korean interface once its host adds a font that draws it, unless
+    /// someone has picked a language by then.
+    #[serde(skip)]
+    pub language_chosen: bool,
     /// Interface size in percent on top of the desktop's scale (100 = Auto), applied as egui's
     /// zoom factor so the ribbon, menus, dialogs and grid grow together. Kept within
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
@@ -106,6 +112,7 @@ impl Default for UiState {
             recent: vec![],
             keytip_invoke: None,
             language: i18n::Language::En,
+            language_chosen: false,
             interface_scale: 100,
         }
     }
@@ -633,6 +640,7 @@ impl SheetApp {
                 match i18n::Language::parse(code) {
                     Some(l) => {
                         self.ui.language = l;
+                        self.ui.language_chosen = true;
                         Ok(json!({"language": l}))
                     }
                     None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
@@ -641,10 +649,12 @@ impl SheetApp {
             "app.font.add" => add_font_command(p),
             "app.language.english" => {
                 self.ui.language = i18n::Language::En;
+                self.ui.language_chosen = true;
                 Ok(json!({"language": i18n::Language::En}))
             }
             "app.language.japanese" => {
                 self.ui.language = i18n::Language::Ja;
+                self.ui.language_chosen = true;
                 Ok(json!({"language": i18n::Language::Ja}))
             }
             "ui.backstage" => {

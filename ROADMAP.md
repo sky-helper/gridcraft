@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (the web build shows a CJK interface once added fonts draw it) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-15 | Web build: a Chinese, Japanese or Korean browser language, or the embedding page's `?lang=`, is used once the fonts the page added draw that interface (English until then, no boxes); a language picked by hand is kept |
 | 2026-10-15 | Fonts: a host adds fonts while the app runs (`app.font.add {name, base64, index?}`, or `gridcraft:font` from a page embedding the web build); every family falls back on them, so the web build, which has no system fonts, can draw Chinese, Japanese and Korean text |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
@@ -194,6 +195,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Progress log: CJK interface languages on the web build once added fonts draw them |
 | 2026-10-15 | minor | Progress log: fonts added at runtime (CJK on the web build) |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |

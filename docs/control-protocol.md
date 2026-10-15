@@ -74,6 +74,15 @@ messages (`{name, bytes, index?}`, bytes an `ArrayBuffer` or `Uint8Array`; see
 `gridcraft:ready` (from GridCraft, with `"font"` in `capabilities`), then `gridcraft:font`, then
 `gridcraft:open`, so the workbook's first frame already has the glyphs.
 
+The web build saves no preferences: each visit starts in the browser's language, or in the one
+the page's URL asks for with `lang` (`index.html?host=parent&lang=ko`; any language code
+`app.language.set` takes, an unknown one is ignored). A Chinese, Japanese or Korean interface
+needs fonts the build doesn't have, so it shows English until the fonts added draw every
+character of that interface's labels (checked against their character maps, not just `covers`: a
+Korean font with Hanja and kana still lacks most of the Simplified Chinese interface), then
+switches in the frame after the `gridcraft:fontResult`. A language the user picks in the View tab
+or File › Options is kept: fonts that arrive later don't change it.
+
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
 workbook (Agile or Standard encryption). Without `password` it returns an error containing
 "is password-protected. Enter its password to open it." and never opens a dialog; a wrong

@@ -157,6 +157,13 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
     ui_json.get("language").and_then(serde_json::Value::as_str).and_then(Language::parse)
 }
 
+/// The interface text in `language`: its own name and its label for every key the catalogs
+/// translate (the Japanese table lists them all; tests hold the other tables to it). What a font
+/// has to draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
+pub fn interface_text(language: Language) -> impl Iterator<Item = &'static str> {
+    std::iter::once(language.name()).chain(JAPANESE.iter().map(move |(key, _)| language.tr(key)))
+}
+
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
 /// `Ui` (not the app) read it to translate their labels; [`set_current`] writes it once per frame.
 fn lang_key() -> egui::Id {
@@ -713,5 +720,40 @@ mod tests {
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+
+    #[test]
+    fn the_interface_text_is_every_label_in_that_language() {
+        for language in Language::ALL {
+            let text: Vec<&str> = interface_text(language).collect();
+            assert_eq!(text.len(), JAPANESE.len() + 1, "{language:?}: its name and a label per key");
+            assert_eq!(text.first(), Some(&language.name()));
+            assert!(text.iter().all(|label| !label.is_empty()), "{language:?}");
+        }
+        let korean: Vec<&str> = interface_text(Language::Ko).collect();
+        assert!(korean.contains(&"데이터") && korean.contains(&"인터페이스 언어"));
+        let english: Vec<&str> = interface_text(Language::En).collect();
+        assert!(english.contains(&"Orientation") && !english.iter().any(|label| label.contains('|')), "English shows keys without their context");
+    }
+
+    #[test]
+    fn a_language_picked_in_this_run_is_noted_but_not_saved() {
+        let fresh = || crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
+        let mut app = fresh();
+        assert!(!app.ui.language_chosen, "nothing picked yet");
+        assert!(app.run("app.language.set", serde_json::json!({"language": "xx"})).is_err());
+        assert!(!app.ui.language_chosen, "an unknown language picks nothing");
+        app.run("app.language.set", serde_json::json!({"language": "de"})).unwrap();
+        assert!(app.ui.language_chosen);
+        for id in ["app.language.english", "app.language.japanese"] {
+            let mut app = fresh();
+            app.run(id, serde_json::json!({})).unwrap();
+            assert!(app.ui.language_chosen, "{id}");
+        }
+        let saved = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(saved.get("languageChosen"), None, "only the language is saved: {saved}");
+        let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+        assert!(!restored.language_chosen);
+        assert_eq!(restored.language, Language::De);
     }
 }

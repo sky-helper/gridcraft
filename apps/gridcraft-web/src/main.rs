@@ -9,9 +9,11 @@
 //! files are read asynchronously.
 //!
 //! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample;
+//! `?lang=ko` asks for an interface language instead of the browser's (an unknown code is
+//! ignored; Chinese, Japanese and Korean wait for fonts that draw them, see `language`);
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
-//! workbook to open and stores what GridCraft saves (`host`), and `&author=` names the user for
-//! notes and comments.
+//! workbook to open and the fonts to draw it with, and stores what GridCraft saves (`host`), and
+//! `&author=` names the user for notes and comments.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Plain JSON, so its tests run natively.
@@ -19,6 +21,9 @@
 mod font_message;
 #[cfg(target_arch = "wasm32")]
 mod host;
+// No browser types either: tested natively too.
+#[cfg(any(target_arch = "wasm32", test))]
+mod language;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

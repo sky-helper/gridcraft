@@ -1,7 +1,8 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use gridcraft_ui_egui::i18n::Language;
+use gridcraft_ui_egui::{Inbox, Services, SheetApp, theme};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
@@ -49,15 +50,12 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
-                    let browser = gridcraft_ui_egui::i18n::Language::system();
-                    if !matches!(
-                        browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
-                    ) {
-                        app.ui.language = browser;
-                    }
+                    // The browser's language, or the one the page asks for with `?lang=`. A Chinese,
+                    // Japanese or Korean one waits until the fonts the page adds draw it (the web
+                    // build has no system fonts and bundles no CJK ones), showing English meanwhile.
+                    let mut language =
+                        crate::language::FollowFonts::new(query_param("lang").as_deref().and_then(Language::parse), Language::system());
+                    language.update(&mut app.ui, theme::extra_font_count(), crate::language::fonts_draw);
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     if let Some(bridge) = &app_bridge {
                         if let Some(author) = query_param("author") {
@@ -65,7 +63,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, language }))
                 }),
             )
             .await;
@@ -93,6 +91,7 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    language: crate::language::FollowFonts,
 }
 
 impl eframe::App for WebShell {
@@ -112,6 +111,9 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        // A font the page added (`gridcraft:font`, answered already) may draw the language that
+        // was waiting for one; the app rebuilds its fonts for both in this frame's `logic`.
+        self.language.update(&mut self.app.ui, theme::extra_font_count(), crate::language::fonts_draw);
         self.app.logic(ctx);
     }
 

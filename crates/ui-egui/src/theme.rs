@@ -444,6 +444,39 @@ pub fn extra_font_count() -> usize {
     EXTRA_FONT_COUNT.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// Whether the fonts [`add_font`] has added draw, between them, every East Asian character of
+/// `text` (Hangul, kana, Han, and the punctuation and full-width forms that go with them, which
+/// egui's own fonts lack); other characters are left to the other fonts. The web build, which has
+/// no system fonts, asks this of an interface language's labels before it shows them: checked
+/// against the fonts' character maps, since a Korean font that [`Coverage`] says covers Han and
+/// kana still lacks most of the Simplified Chinese and some of the Japanese interface.
+pub fn extra_fonts_draw(text: impl IntoIterator<Item = char>) -> bool {
+    fonts_draw(&EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner), text)
+}
+
+fn fonts_draw(fonts: &[ExtraFont], text: impl IntoIterator<Item = char>) -> bool {
+    use skrifa::MetadataProvider;
+    // Every added font parsed when it was added; one that somehow doesn't maps nothing.
+    let maps: Vec<_> = fonts.iter().filter_map(|f| skrifa::FontRef::from_index(&f.data.font, f.data.index).ok()).map(|font| font.charmap()).collect();
+    text.into_iter().filter(|c| east_asian(*c)).all(|c| maps.iter().any(|map| map.map(c).is_some()))
+}
+
+/// Hangul, kana, Han, and the punctuation and full-width forms that go with them: the characters
+/// of a Chinese, Japanese or Korean interface that egui's own fonts don't draw.
+fn east_asian(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x1100..=0x11FF // Hangul Jamo
+            | 0x2E80..=0x2FDF // CJK and Kangxi radicals
+            | 0x3000..=0x9FFF // CJK punctuation, kana, Bopomofo, compatibility Jamo, CJK ideographs
+            | 0xA960..=0xA97F // Hangul Jamo Extended-A
+            | 0xAC00..=0xD7FF // Hangul syllables, Jamo Extended-B
+            | 0xF900..=0xFAFF // CJK compatibility ideographs
+            | 0xFF00..=0xFFEF // half-width and full-width forms
+            | 0x20000..=0x3FFFF // CJK ideographs, extensions B and later
+    )
+}
+
 fn extra_fonts() -> Vec<ExtraFont> {
     EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
@@ -1366,6 +1399,26 @@ mod extra_font_tests {
         if let Some((bytes, index)) = korean_face() {
             assert!(coverage(&bytes, index).hangul, "a Korean face covers Hangul");
         }
+    }
+
+    #[test]
+    fn east_asian_text_needs_an_added_font_that_maps_every_character() {
+        let mut extra = Vec::new();
+        assert!(fonts_draw(&extra, "Daten, Données, Данные, Dados".chars()), "egui's own fonts draw these");
+        assert!(fonts_draw(&extra, "Cut (⌘X)… →".chars()), "symbols are left to the other fonts");
+        for text in ["데이터", "数据", "データ", "（", "ー"] {
+            assert!(!fonts_draw(&extra, text.chars()), "{text} with no font added");
+        }
+        assert!(add_extra(&mut extra, "Ubuntu Light", ubuntu(), 0).is_ok());
+        assert!(!fonts_draw(&extra, "데이터".chars()), "a Latin font draws no Hangul");
+        assert!(fonts_draw(&extra, "Data".chars()));
+        let Some((bytes, index)) = korean_face() else {
+            return; // no Korean face on this machine
+        };
+        assert!(add_extra(&mut extra, "Korean", bytes, index).is_ok());
+        assert!(fonts_draw(&extra, "데이터 붙여넣기".chars()), "the Korean face, after the Latin one, draws Hangul");
+        let korean = crate::i18n::interface_text(crate::i18n::Language::Ko).flat_map(str::chars);
+        assert!(fonts_draw(&extra, korean), "and the whole Korean interface");
     }
 
     #[test]
