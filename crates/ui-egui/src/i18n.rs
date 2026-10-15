@@ -165,8 +165,10 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
 
 /// The interface text in `language`: its own name and its label for every key of the Japanese
 /// table. Tests hold the catalogs to those keys: every other table translates each of them, and
-/// the Chinese and Korean tables translate no others, so none of their labels is left out. What
-/// a font has to draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
+/// the Chinese table translates no others, so none of its labels is left out (Chinese fonts
+/// differ in which Han characters they have). The Korean table may translate more keys, but uses
+/// no Han or kana: its Hangul is one block, which Korean fonts cover whole. What a font has to
+/// draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
 pub fn interface_text(language: Language) -> impl Iterator<Item = &'static str> {
     std::iter::once(language.name()).chain(JAPANESE.iter().map(move |(key, _)| language.tr(key)))
 }
@@ -744,19 +746,23 @@ mod tests {
     }
 
     #[test]
-    fn the_cjk_catalogs_translate_only_the_japanese_keys() {
-        // `interface_text` lists the labels by the Japanese table's keys: a key only the Chinese or
-        // Korean table had would show a label the web build never checks against its fonts.
-        for (name, src) in [("ko", include_str!("i18n/ko.rs")), ("zh", include_str!("i18n/zh.rs"))] {
-            let mut keys = 0;
-            for line in src.lines() {
-                let Some((key, _)) = line.trim().strip_prefix('"').and_then(|l| l.split_once("\" =>")) else { continue };
-                let key = key.replace("\\n", "\n").replace("\\\"", "\"");
-                assert!(JAPANESE.iter().any(|(k, _)| *k == key), "{name}: {key:?} is never checked against the fonts");
-                keys += 1;
-            }
-            assert_eq!(keys, JAPANESE.len(), "{name}: every key was read");
+    fn the_cjk_catalogs_stay_within_what_the_font_check_covers() {
+        // `interface_text` lists the labels by the Japanese table's keys: a key only the Chinese
+        // table had would show a label the web build never checks against its fonts, and Chinese
+        // fonts differ in which Han characters they have.
+        let mut keys = 0;
+        for line in include_str!("i18n/zh.rs").lines() {
+            let Some((key, _)) = line.trim().strip_prefix('"').and_then(|l| l.split_once("\" =>")) else { continue };
+            let key = key.replace("\\n", "\n").replace("\\\"", "\"");
+            assert!(JAPANESE.iter().any(|(k, _)| *k == key), "zh: {key:?} is never checked against the fonts");
+            keys += 1;
         }
+        assert_eq!(keys, JAPANESE.len(), "zh: every key was read");
+        // The Korean table may translate more keys (catalogs grow) as long as it uses no Han or
+        // kana: its Hangul is one block, which Korean fonts cover whole.
+        let han_or_kana =
+            |c: char| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}');
+        assert!(!include_str!("i18n/ko.rs").chars().any(han_or_kana), "ko: a label uses Han or kana, which the font check doesn't cover");
     }
 
     #[test]
