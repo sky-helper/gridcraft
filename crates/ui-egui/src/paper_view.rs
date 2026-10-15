@@ -343,8 +343,11 @@ fn page_kind(sh: &Sheet, pg: &PageGrid, page: (usize, usize)) -> HfPage {
     sh.print.hf_page(n == 1, n)
 }
 
-/// Starts (or moves) editing a header or footer section.
+/// Starts (or moves) editing a header or footer section (not on a read-only workbook).
 pub fn begin(app: &mut SheetApp, sheet: usize, sh: &Sheet, page: (usize, usize), zone: HfZone) {
+    if app.refuse_read_only() {
+        return;
+    }
     if let Some(e) = app.grid.hf_edit.as_mut()
         && e.sheet == sheet
         && e.page == page

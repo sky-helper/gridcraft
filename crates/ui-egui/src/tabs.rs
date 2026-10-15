@@ -151,7 +151,8 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 if resp.clicked() {
                                     activate_sheet(app, i);
                                 }
-                                if resp.double_clicked() {
+                                // Renaming a sheet changes the workbook: not a read-only one.
+                                if resp.double_clicked() && !app.refuse_read_only() {
                                     app.grid.renaming_tab = Some(i);
                                     app.grid.rename_text = name.clone();
                                 }
@@ -174,7 +175,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     if ui.button("Delete").clicked() {
                                         app.run_or_alert("home.deleteSheet", json!({"sheet": i}));
                                     }
-                                    if ui.button("Rename").clicked() {
+                                    if ui.button("Rename").clicked() && !app.refuse_read_only() {
                                         app.grid.renaming_tab = Some(i);
                                         app.grid.rename_text = name.clone();
                                     }

@@ -132,7 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-10-15 | Read-only workbooks: `file.open {readOnly: true}` refuses every command that would change the workbook (all undo steps but the view ones, plus undo, Cut, Calculate Now…) and any save or export over its file, until `file.enableEditing` (refused with `lockReadOnly: true`) |
+| 2026-10-15 | Read-only workbooks: `file.open {readOnly: true}` refuses every command that would change the workbook (all undo steps but the view ones, plus undo, Cut, Calculate Now…) and any save or export over its file, until `file.enableEditing` (refused with `lockReadOnly: true`); the window shows an info bar with Enable Editing and "[Read-Only]" in the title, typing and the filter menu open nothing, and Save asks for a copy's name |
 | 2026-10-15 | Open without recalculating: `file.open {recalculate: false}` shows the results stored in the file (a `TODAY()` keeps its saved date; array results included), and a workbook saved in manual calculation mode opens that way unless it asks for a full calculation on load (`fullCalcOnLoad`, `.xls` `Uncalced`); in automatic mode the first edit then recalculates its dependents along with the formulas recalculated after every edit (volatile functions, defined names, table references…) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |

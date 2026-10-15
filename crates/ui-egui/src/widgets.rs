@@ -362,3 +362,40 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
         app.notice = None;
     }
 }
+
+/// The info bar of a workbook open read-only (`file.open {readOnly: true}`), in the notice bar's
+/// slot and style: it says so, with Enable Editing (`file.enableEditing`) unless the workbook was
+/// opened read-only for good (`lockReadOnly`). It shows a state rather than an open-time notice,
+/// so it stays until editing is enabled.
+pub fn read_only_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(locked) = app.session.active().filter(|d| d.read_only).map(|d| d.read_only_locked) else { return };
+    let t = Tokens::get(ui.ctx());
+    let mut enable = false;
+    egui::Panel::top("read_only_bar").frame(egui::Frame::NONE.fill(t.notice_warn_bg).inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
+        let bar = ui.max_rect();
+        ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.notice_warn_border), StrokeKind::Inside);
+        ui.horizontal_centered(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+            icons::paint(ui.painter(), r, Icon::Lock, t.notice_warn_border);
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(tr(ui, "Read-only")).font(theme::ui_bold(12.5)).color(t.text));
+            ui.add_space(6.0);
+            let text = if locked {
+                "This workbook was opened for reading only."
+            } else {
+                "This workbook was opened for reading. To change it, enable editing."
+            };
+            ui.label(egui::RichText::new(tr(ui, text)).font(theme::ui_font(12.5)).color(t.text));
+            if !locked {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(egui::RichText::new(tr(ui, "Enable Editing")).font(theme::ui_font(12.5))).clicked() {
+                        enable = true;
+                    }
+                });
+            }
+        });
+    });
+    if enable {
+        app.run_or_alert("file.enableEditing", serde_json::json!({}));
+    }
+}

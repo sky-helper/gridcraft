@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (read-only workbooks: info bar with Enable Editing) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -30,6 +30,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Dark mode, system appearance | yes | yes | done (10-09) |
 | Page Layout view (paper view with rulers and header editing) | yes | yes (#329, 10-11): per-sheet view saved in XLSX, pages with margins and gaps on the print pagination, "Click to add data" pages, rulers (inches or centimetres), headers and footers drawn and edited in place with a Header & Footer tab | margins drag on the rulers (#792, with header and footer margins); header/footer pictures, Different First Page / Odd & Even missing (1–3 h) |
 | Multiple windows per workbook | yes | no (#162) | see [hardware-parity.md](hardware-parity.md) |
+| Read-only workbooks (Open Read-Only, the message bar's Enable Editing) | yes | yes (10-15): `file.open {readOnly: true}` refuses every command that would change the workbook, and Save, Save As or an export over its file, until `file.enableEditing`; an info bar under the ribbon says so with Enable Editing (left out for `lockReadOnly: true`, which can't be switched to editing), the title shows "[Read-Only]", typing, F2, the formula bar and the filter and drop-down list menus open nothing, and Save asks where to save a copy | no Open Read-Only choice in File ▸ Open yet, "Read-only recommended" and Mark as Final aren't read from or saved in files, ribbon buttons aren't greyed (a click says why instead) |
 
 ## Grid interaction
 
@@ -161,6 +162,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Read-only workbooks (`file.open {readOnly: true}`): an info bar with Enable Editing, "[Read-Only]" in the title; typing, F2 and the filter menu open nothing, and Save asks for a copy's name |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

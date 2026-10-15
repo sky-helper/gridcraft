@@ -109,7 +109,10 @@ The result's `readOnly` and `lockReadOnly` say how the workbook opened, `documen
 them, and `view.newWindow` on a read-only workbook opens a read-only window. A path that is already
 open is switched to as it is: the result has its `readOnly` and `lockReadOnly`, and
 `readOnlyIgnored` when `readOnly` or `lockReadOnly` was given. A `readOnly` or `lockReadOnly` that
-isn't true or false is refused before the file is read.
+isn't true or false is refused before the file is read. In the window, a read-only workbook shows
+an info bar (with Enable Editing unless `lockReadOnly`) and "[Read-Only]" after its title; typing,
+F2, the formula bar, the filter and drop-down list menus open nothing, and Save asks where to save
+a copy.
 
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
