@@ -324,6 +324,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Arbeitsmappenberechnung",
         "Enable iterative calculation" => "Iterative Berechnung aktivieren",
         "Calculation settings are saved with the workbook." => "Berechnungseinstellungen werden mit der Arbeitsmappe gespeichert.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Schreibgeschützt",
+        "Read-Only" => "Schreibgeschützt",
+        "Enable Editing" => "Bearbeitung aktivieren",
+        "This workbook was opened for reading only." => "Diese Arbeitsmappe wurde nur zum Lesen geöffnet.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Diese Arbeitsmappe wurde zum Lesen geöffnet. Aktivieren Sie die Bearbeitung, um sie zu ändern."
+        }
+        "This workbook is open read-only." => "Diese Arbeitsmappe ist schreibgeschützt geöffnet.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Diese Arbeitsmappe ist schreibgeschützt geöffnet. Klicken Sie auf „Bearbeitung aktivieren“, um sie zu ändern."
+        }
         "Interface size" => "Größe der Benutzeroberfläche",
         "Auto" => "Automatisch",
         "100%" => "100%",

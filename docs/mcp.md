@@ -52,7 +52,7 @@ with a file open.
 | `create_table` | `range`, `style?`, `header?`, `name?` | `insert.table`. |
 | `sort_range` | `keys`, `range?`, `header?` | `data.sort`; keys are `"B"`, `"B desc"` or `{column, order}`. |
 | `filter` | `column`, `range?`, `values?`, `custom?`, `top?`, `blanks?`, `clear?` | `data.filterBy` (turns AutoFilter on when needed). |
-| `open_workbook` / `save_workbook` / `new_workbook` | `path` / `path?` / `sample?` | Files (`.xlsx`, `.csv`, `.tsv`, `.json`, `.html`). |
+| `open_workbook` / `save_workbook` / `new_workbook` | `path`, `readOnly?`, `lockReadOnly?`, `recalculate?` / `path?` / `sample?` | Files (`.xlsx`, `.csv`, `.tsv`, `.json`, `.html`). `open_workbook` opens read-only (`readOnly`; `lockReadOnly` for good) or with the results stored in the file (`recalculate: false`), as `file.open` does. |
 | `undo` / `redo` | `steps?` | History. |
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |

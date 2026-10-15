@@ -410,6 +410,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Cálculo da pasta de trabalho",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Somente leitura",
+        "Read-Only" => "Somente Leitura",
+        "Enable Editing" => "Habilitar Edição",
+        "This workbook was opened for reading only." => "Esta pasta de trabalho foi aberta somente para leitura.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Esta pasta de trabalho foi aberta para leitura. Para alterá-la, habilite a edição."
+        }
+        "This workbook is open read-only." => "Esta pasta de trabalho está aberta somente para leitura.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Esta pasta de trabalho está aberta somente para leitura. Para alterá-la, clique em Habilitar Edição."
+        }
         "OK" => "OK",
         "Cancel" => "Cancelar",
         "Don't Save" => "Não Salvar",

@@ -604,6 +604,20 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    // The read-only info bar, title and messages.
+    ("Read-only", "読み取り専用"),
+    ("Read-Only", "読み取り専用"),
+    ("Enable Editing", "編集を有効にする"),
+    ("This workbook was opened for reading only.", "このブックは読み取り専用で開かれています。"),
+    (
+        "This workbook was opened for reading. To change it, enable editing.",
+        "このブックは閲覧用に開かれています。変更するには、編集を有効にしてください。",
+    ),
+    ("This workbook is open read-only.", "このブックは読み取り専用で開いています。"),
+    (
+        "This workbook is open read-only. Click Enable Editing to change it.",
+        "このブックは読み取り専用で開いています。変更するには [編集を有効にする] をクリックしてください。",
+    ),
 ];
 
 #[cfg(test)]

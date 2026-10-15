@@ -410,6 +410,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Только для чтения",
+        "Read-Only" => "Только для чтения",
+        "Enable Editing" => "Разрешить редактирование",
+        "This workbook was opened for reading only." => "Эта книга открыта только для чтения.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Эта книга открыта для просмотра. Чтобы изменить её, разрешите редактирование."
+        }
+        "This workbook is open read-only." => "Эта книга открыта только для чтения.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Эта книга открыта только для чтения. Чтобы изменить её, нажмите «Разрешить редактирование»."
+        }
         _ => return None,
     })
 }

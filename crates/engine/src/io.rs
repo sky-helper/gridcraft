@@ -405,10 +405,15 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// The temporary file [`write_file`] writes beside `path` before renaming it over `path`.
+pub fn temp_path(path: &str) -> String {
+    format!("{path}.sctmp")
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    let tmp = format!("{path}.sctmp");
+    let tmp = temp_path(path);
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
@@ -420,6 +425,28 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 #[cfg(target_arch = "wasm32")]
 pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
+}
+
+/// Whether two paths name the same file: the same text, or on disk the same file reached another
+/// way (`dir/./book.xlsx`, a relative path, a link, another case on a case-insensitive disk).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn same_file(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return x.dev() == y.dev() && x.ino() == y.ino();
+        }
+    }
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn same_file(a: &str, b: &str) -> bool {
+    a == b
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

@@ -1536,6 +1536,9 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(path) = str_param(p, "path").filter(|x| !x.is_empty()) {
+        super::file::refuse_read_only_file(s, "file.exportPdf", path)?;
+    }
     let (bytes, pages) = build_pdf(s, p, "file.exportPdf")?;
     match str_param(p, "path").filter(|x| !x.is_empty()) {
         Some(path) => {
@@ -1547,6 +1550,9 @@ pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn print(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(path) = str_param(p, "path").filter(|x| !x.is_empty()) {
+        super::file::refuse_read_only_file(s, "file.print", path)?;
+    }
     let (bytes, pages) = build_pdf(s, p, "file.print")?;
     let mut out = json!({"pages": pages, "bytes": bytes.len(), "base64": crate::io::base64_encode(&bytes)});
     if let Some(path) = str_param(p, "path").filter(|x| !x.is_empty()) {

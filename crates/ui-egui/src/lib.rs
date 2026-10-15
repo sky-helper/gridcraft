@@ -510,6 +510,11 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // Save on a read-only workbook asks where to save a copy, as Save As does: the workbook's
+        // own file isn't written over.
+        if id == "file.save" && self.read_only() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
+            return self.open_dialog("saveAs", json!({}));
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -551,6 +556,25 @@ impl SheetApp {
         if let Err(e) = self.run("file.exportPdf", params) {
             self.alert(e);
         }
+    }
+
+    /// The active workbook is open read-only (`file.open {readOnly: true}`): the interface starts
+    /// no edit of it (the engine refuses the commands that would change it anyway).
+    pub fn read_only(&self) -> bool {
+        self.session.active().is_some_and(|d| d.read_only)
+    }
+
+    /// Refuses an edit the interface would start on a read-only workbook (typing, a filter menu…),
+    /// saying why in a toast. Returns whether it refused.
+    pub(crate) fn refuse_read_only(&mut self) -> bool {
+        let Some(d) = self.session.active().filter(|d| d.read_only) else { return false };
+        let why = if d.read_only_locked {
+            "This workbook is open read-only."
+        } else {
+            "This workbook is open read-only. Click Enable Editing to change it."
+        };
+        self.toast = Some((self.ui.language.tr(why).to_string(), now_ms()));
+        true
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
@@ -912,7 +936,11 @@ impl SheetApp {
     }
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
+    /// A read-only workbook opens no editor: what it would enter is refused.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        if self.refuse_read_only() {
+            return;
+        }
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
@@ -1156,6 +1184,7 @@ impl SheetApp {
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
+            widgets::read_only_bar(self, ui);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
@@ -1189,12 +1218,13 @@ impl SheetApp {
             }
         }
         self.perf.last = now;
-        // AutoSave: save workbooks that have a file shortly after they change.
+        // AutoSave: save workbooks that have a file shortly after they change (never one open
+        // read-only, whose file isn't written over).
         if self.grid.autosave
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
+            && self.session.active().is_some_and(|d| !d.read_only && d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
             self.grid.last_autosave = now;
             self.store_view_state();
@@ -1202,7 +1232,14 @@ impl SheetApp {
         }
         // Window title.
         if let Some(d) = self.session.active() {
-            let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+            let state = if d.read_only {
+                format!(" [{}]", self.ui.language.tr("Read-Only"))
+            } else if d.is_dirty() {
+                " — Edited".to_string()
+            } else {
+                String::new()
+            };
+            let title = format!("{}{state}", d.display_title());
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);

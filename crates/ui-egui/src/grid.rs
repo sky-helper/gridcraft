@@ -1846,8 +1846,9 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
 
-    // Draw tab tools: the pen records a stroke, the eraser deletes ink under the pointer.
-    if !app.session.draw_tool.is_empty() && in_cells {
+    // Draw tab tools: the pen records a stroke, the eraser deletes ink under the pointer. A
+    // read-only workbook's ink can't change, so there the pointer selects as usual.
+    if !app.session.draw_tool.is_empty() && in_cells && !app.read_only() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.session.draw_tool == "pen" {
             if let Some(p) = pos
@@ -2051,16 +2052,21 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         let c = geo.cell_at(sh, p);
-        // Data validation list arrow next to the active cell.
+        // Data validation list arrow next to the active cell (picking enters a value: not on a
+        // read-only workbook).
         if let Some(r) = validation_arrow(sh, geo, sel.active)
             && r.contains(p)
         {
-            app.grid.list_picker = Some(sel.active);
+            if !app.refuse_read_only() {
+                app.grid.list_picker = Some(sel.active);
+            }
             return;
         }
-        // Filter dropdown buttons.
+        // Filter dropdown buttons (sorting and filtering would change a read-only workbook).
         if is_filter_button(sh, geo, p) {
-            app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
+            if !app.refuse_read_only() {
+                app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
+            }
             return;
         }
         // Point mode while editing a formula: clicking inserts a reference.
@@ -2740,6 +2746,12 @@ fn filter_table_range(sh: &Sheet, col: u32, row: u32) -> Option<RangeRef> {
 
 fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some((col, row, at)) = app.grid.filter_menu else { return };
+    // Its items sort and filter, and it gives a table an AutoFilter itself (below), so it doesn't
+    // open on a read-only workbook, however it was asked for (Alt+Down, the control channel).
+    if app.read_only() {
+        app.grid.filter_menu = None;
+        return;
+    }
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
     let si = wb.active_sheet;
@@ -3071,6 +3083,11 @@ pub(crate) fn paint_overlays(
 
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
+    // Picking an item enters it: the list doesn't open on a read-only workbook.
+    if app.read_only() {
+        app.grid.list_picker = None;
+        return;
+    }
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
     let si = wb.active_sheet;

@@ -14,7 +14,8 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
-//! - `app.open {path | name?, base64, password?}`, `app.save {path?}`, `app.quit`
+//! - `app.open {path | name?, base64, password?, recalculate?, readOnly?, lockReadOnly?}`,
+//!   `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
 
@@ -69,6 +70,32 @@ fn wrap(r: Result<Json, String>) -> Outcome {
         Ok(v) => ok(v),
         Err(e) => err(e),
     }
+}
+
+/// `file.open`'s params for `app.open`: the file (`source`), plus the password and how to open it
+/// (`recalculate`, `readOnly`, `lockReadOnly`) as given: `file.open` checks them.
+fn open_params(p: &Json, mut source: Json) -> Json {
+    if let Some(o) = source.as_object_mut() {
+        for key in ["password", "recalculate", "readOnly", "lockReadOnly"] {
+            if let Some(v) = p.get(key) {
+                o.insert(key.into(), v.clone());
+            }
+        }
+    }
+    source
+}
+
+/// `app.open`'s reply: the workbook's title, and how `file.open` opened it (`readOnly`,
+/// `lockReadOnly`, `recalculated`; for a file already open, `alreadyOpen` and what it ignored).
+fn opened(app: &SheetApp, r: &Json) -> Json {
+    let mut reply = serde_json::Map::new();
+    reply.insert("title".into(), json!(app.session.active().map(|d| d.display_title())));
+    for key in ["readOnly", "lockReadOnly", "recalculated", "alreadyOpen", "recalculateIgnored", "readOnlyIgnored"] {
+        if let Some(v) = r.get(key) {
+            reply.insert(key.into(), v.clone());
+        }
+    }
+    Json::Object(reply)
 }
 
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
@@ -281,6 +308,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.edit.begin" => {
             app.begin_edit(s("text").map(str::to_string), false);
+            // A read-only workbook opens no editor: say so, as the engine does for its commands.
+            if app.editor.is_none() && app.read_only() {
+                return err(gridcraft_engine::EngineError::Disabled(method.into(), gridcraft_engine::cmd::READ_ONLY.into()));
+            }
             ok(Json::Null)
         }
         "ui.edit.text" => match app.editor.as_mut() {
@@ -364,7 +395,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
-        "ui.screenshot" => return Outcome::Screenshot { path: s("path").map(str::to_string) },
+        "ui.screenshot" => {
+            // A read-only workbook's file is never written over, by a screenshot either.
+            if let Some(path) = s("path")
+                && let Err(e) = gridcraft_engine::cmd::file::refuse_read_only_file(&app.session, method, path)
+            {
+                return err(e);
+            }
+            return Outcome::Screenshot { path: s("path").map(str::to_string) };
+        }
         "app.open" => {
             // A file, or a workbook's bytes (the web build has no files: the embedding page sends
             // them). Not `open_path`: that asks for a missing password in a dialog, and
@@ -372,9 +411,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let (path, params) = match (s("base64"), s("path")) {
                 (Some(base64), _) => {
                     let name = s("name").filter(|n| !n.trim().is_empty()).unwrap_or("Book.xlsx");
-                    (None, json!({"name": name, "base64": base64, "password": s("password")}))
+                    (None, open_params(p, json!({"name": name, "base64": base64})))
                 }
-                (None, Some(path)) => (Some(path), json!({"path": path, "password": s("password")})),
+                (None, Some(path)) => (Some(path), open_params(p, json!({"path": path}))),
                 (None, None) => return err("missing `path` or `base64`"),
             };
             let r = app.run("file.open", params);
@@ -385,7 +424,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             match (r, app.message.take()) {
                 (Err(e), _) => err(crate::clean_error(&e)),
                 (Ok(_), Some((_, m))) => err(m),
-                (Ok(_), None) => ok(json!({"title": app.session.active().map(|d| d.display_title())})),
+                (Ok(r), None) => ok(opened(app, &r)),
             }
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),

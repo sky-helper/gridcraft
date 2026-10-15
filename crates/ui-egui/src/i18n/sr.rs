@@ -402,6 +402,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Izračunavanje radne sveske",
         "Enable iterative calculation" => "Omogući iterativno izračunavanje",
         "Calculation settings are saved with the workbook." => "Podešavanja izračunavanja se čuvaju sa radnom sveskom.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Samo za čitanje",
+        "Read-Only" => "Samo za čitanje",
+        "Enable Editing" => "Omogući uređivanje",
+        "This workbook was opened for reading only." => "Ova radna sveska je otvorena samo za čitanje.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Ova radna sveska je otvorena za čitanje. Da biste je izmenili, omogućite uređivanje."
+        }
+        "This workbook is open read-only." => "Ova radna sveska je otvorena samo za čitanje.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Ova radna sveska je otvorena samo za čitanje. Da biste je izmenili, kliknite na Omogući uređivanje."
+        }
         "Left Margin" => "Leva margina",
         "Right Margin" => "Desna margina",
         "Top Margin" => "Gornja margina",
