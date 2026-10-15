@@ -296,7 +296,10 @@ fn underline(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn font_name(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(name) = str_param(p, "name").map(str::to_string) else { return Err(bad("home.fontName", "missing `name`")) };
-    apply_style(s, p, |st| st.font.name = name.clone())
+    apply_style(s, p, |st| {
+        st.font.name = name.clone();
+        st.font.implicit_name = false;
+    })
 }
 
 fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
@@ -488,11 +491,17 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").cloned() else {
+    let Some(mut patch) = p.get("style").cloned() else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    if let Some(font) = patch.get_mut("font").and_then(Json::as_object_mut)
+        && font.contains_key("name")
+        && !font.contains_key("implicit_name")
+    {
+        font.insert("implicit_name".into(), Json::Bool(false));
+    }
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);

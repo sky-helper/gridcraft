@@ -13,6 +13,12 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 
 ## Workbook formats
 
+Partial cell fonts with no `<name>` keep that omission on XLSX save (2026-10-15).
+The model still supplies a rendering fallback, but it is not written as an explicit Calibri
+face: doing so moved centred headers in a synthetic workbook's LibreOffice PDF render.
+Unrelated edits and repeated saves preserve the omission; explicitly choosing a font writes
+that face, including when it equals the fallback. Tests: `implicit_font.rs`, engine font undo/redo.
+
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
 captions or private metadata. Supported numeric polylines reopen as editable ink, retaining points,
 colour, integer width and anchor. Curves, filled paths, transforms and unsupported line styles are
@@ -85,6 +91,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Preserve an omitted XLSX font face through unrelated edits and repeated saves; explicit font selection remains undoable. Synthetic LibreOffice isolation identifies forced Calibri as the source of header movement. |
 | 2026-10-15 | minor | XLSX: a sheet without `<pageSetup>` is saved without one. Saving always wrote `<pageSetup orientation="portrait"/>`, which is Letter without `paperSize` (the ECMA-376 default), while a sheet without it is printed on the application's default paper (seen in LibreOffice), so sheets moved from that paper (A4 in most locales) to Letter. `paperSize` numbers GridCraft has no name for are kept instead of dropped, and paper names given in another spelling (`11x17`, `A-4`) are saved as Tabloid and A4 instead of Letter |
 | 2026-10-15 | minor | XLSX: row heights saved in a file are kept when it is opened and saved. Every saved `ht` is read, one equal to the sheet default too: rows are read before `sheetFormatPr`, so a height equal to the built-in 15pt was dropped and a 15pt row on a 14.25pt sheet came back 14.25pt. Opening fits only the rows saved without a height (#833), and merged cells no longer size their row (a wrapped paragraph merged across columns was measured against its first column and grew the row to 409.5pt; an edit never shrinks a row they cross). Rows saved at the default height now keep their entry and write their `ht` back. `.xls` import still drops ROW heights equal to the sheet default |
 | 2026-10-15 | minor | XLSX: the values cached in an array formula's range (legacy and dynamic) are read as the values it spilled instead of being dropped, so a workbook opened without recalculating (`file.open {recalculate: false}`, or saved in manual calculation mode) shows them; a recalculation lays the range out again as before. `.xls` legacy arrays the same. A range keeps them only when it starts at its formula, holds at most 1 million cells (what a save caches for one range) and fits in 4 million cells per workbook; otherwise they are dropped and the workbook is marked as needing a full calculation. `calcPr fullCalcOnLoad` is read, and written back until the workbook is calculated in full; `.xls` `Uncalced` sets it too |

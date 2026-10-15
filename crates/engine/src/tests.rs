@@ -14,6 +14,32 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn explicitly_choosing_the_fallback_font_is_undoable() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Header"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let style = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.implicit_name = true);
+        std::sync::Arc::make_mut(&mut wb.sheets[0]).set_style(CellRef::parse("A1").unwrap(), style);
+    }
+    let implicit = |s: &Session| {
+        let d = s.doc().unwrap();
+        d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::parse("A1").unwrap())).font.implicit_name
+    };
+    assert!(implicit(&s));
+    s.execute("home.fontName", json!({"name": gridcraft_model::DEFAULT_FONT})).unwrap();
+    assert!(!implicit(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(implicit(&s));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(!implicit(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("home.formatCells", json!({"style": {"font": {"name": gridcraft_model::DEFAULT_FONT}}})).unwrap();
+    assert!(!implicit(&s));
+}
+
+#[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();

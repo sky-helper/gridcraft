@@ -154,6 +154,10 @@ pub enum VertAlign {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Font {
     pub name: String,
+    /// The source left the face unspecified. `name` remains a usable rendering fallback;
+    /// saving must not turn that fallback into an explicit face unless the user chooses one.
+    #[serde(default)]
+    pub implicit_name: bool,
     pub size: f32,
     pub bold: bool,
     pub italic: bool,
@@ -167,6 +171,7 @@ impl Eq for Font {}
 impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
+        self.implicit_name.hash(h);
         self.size.to_bits().hash(h);
         (self.bold, self.italic, self.underline, self.strike, self.color, self.vert).hash(h);
     }
@@ -176,6 +181,7 @@ impl Default for Font {
     fn default() -> Self {
         Font {
             name: crate::DEFAULT_FONT.into(),
+            implicit_name: false,
             size: crate::DEFAULT_FONT_SIZE,
             bold: false,
             italic: false,

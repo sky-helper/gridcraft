@@ -325,7 +325,18 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
             }
         }
     }
-    let fonts: Vec<Font> = root.child("fonts").map(|f| f.kids("font").map(|e| read_font(e, &palette)).collect()).unwrap_or_default();
+    let fonts: Vec<Font> = root
+        .child("fonts")
+        .map(|f| {
+            f.kids("font")
+                .map(|e| {
+                    let mut font = read_font(e, &palette);
+                    font.implicit_name = e.child("name").or_else(|| e.child("rFont")).and_then(|n| n.attr("val")).is_none();
+                    font
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let fills: Vec<Fill> = root.child("fills").map(|f| f.kids("fill").map(|e| read_fill(e, &palette, false)).collect()).unwrap_or_default();
     let borders: Vec<Borders> = root.child("borders").map(|f| f.kids("border").map(|e| read_border(e, &palette)).collect()).unwrap_or_default();
     let xfs =
@@ -428,7 +439,7 @@ fn font_xml(f: &Font, dxf: bool, minor: bool) -> String {
     } else if !dxf {
         s.push_str("<color theme=\"1\"/>");
     }
-    if !dxf {
+    if !dxf && (!f.implicit_name || f.name != gridcraft_model::DEFAULT_FONT) {
         let _ = write!(s, "<name val=\"{}\"/><family val=\"2\"/>", esc_attr(&f.name));
         if minor {
             s.push_str("<scheme val=\"minor\"/>");
