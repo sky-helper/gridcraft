@@ -2138,6 +2138,45 @@ fn viewing_a_read_only_workbook_is_neither_an_undo_step_nor_a_change() {
     assert!(d.is_dirty() && d.undo.len() == 2, "dirty {}, {} undo steps", d.is_dirty(), d.undo.len());
 }
 
+/// Nothing a read-only workbook allows calculates it: opened with its stored results
+/// (`recalculate: false`), volatile results (`RAND()`, `NOW()`) stay as saved through viewing,
+/// switching sheets, finding, the Watch Window, a new window and Enable Editing, so the workbook
+/// shows exactly what was saved.
+#[test]
+fn nothing_a_read_only_workbook_allows_calculates() {
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=RAND()"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=NOW()"})).unwrap();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let book = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "v.xlsx", "base64": book, "readOnly": true, "recalculate": false})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let results = |s: &Session| {
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+        (sh.value(CellRef::new(0, 0)), sh.value(CellRef::new(1, 0)))
+    };
+    let saved = results(&s);
+    for (id, params) in [
+        ("view.zoom", json!({"percent": 150})),
+        ("view.freezePanes", json!({"cell": "B2"})),
+        ("view.gridlines", json!({})),
+        ("formulas.showFormulas", json!({})),
+        ("view.pageLayout", json!({})),
+        ("view.normal", json!({})),
+        ("formulas.watchWindow", json!({"add": "A1"})),
+        ("sheet.next", json!({})),
+        ("sheet.previous", json!({})),
+        ("edit.find", json!({"what": "x"})),
+        ("view.customViews", json!({})),
+        ("view.newWindow", json!({})),
+        ("file.enableEditing", json!({})),
+    ] {
+        let _ = s.execute(id, params);
+        assert_eq!(results(&s), saved, "{id}");
+    }
+}
+
 /// `file.open {lockReadOnly: true}` opens a workbook read-only for good: it can't be switched to
 /// editing, and says why. It implies `readOnly`, can't go with `readOnly: false`, and anything but
 /// true or false is refused before the file is read.

@@ -324,6 +324,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Výpočet sešitu",
         "Enable iterative calculation" => "Povolit iterativní výpočet",
         "Calculation settings are saved with the workbook." => "Nastavení výpočtů se ukládá se sešitem.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Jen pro čtení",
+        "Read-Only" => "Jen pro čtení",
+        "Enable Editing" => "Povolit úpravy",
+        "This workbook was opened for reading only." => "Tento sešit byl otevřen jen pro čtení.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Tento sešit byl otevřen pro čtení. Chcete-li ho změnit, povolte úpravy."
+        }
+        "This workbook is open read-only." => "Tento sešit je otevřen jen pro čtení.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Tento sešit je otevřen jen pro čtení. Chcete-li ho změnit, klikněte na Povolit úpravy."
+        }
         "100%" => "100 %",
         "Zoom to\nSelection" => "Přiblížit\nna výběr",
         "Freeze\nPanes" => "Ukotvit\npříčky",

@@ -409,6 +409,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "변경할 때마다 .xlsx 통합 문서를 자동으로 저장",
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
+        // The read-only info bar, title and messages.
+        "Read-only" => "읽기 전용",
+        "Read-Only" => "읽기 전용",
+        "Enable Editing" => "편집 사용",
+        "This workbook was opened for reading only." => "이 통합 문서는 읽기 전용으로 열렸습니다.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "이 통합 문서는 읽기용으로 열렸습니다. 변경하려면 편집을 사용하세요."
+        }
+        "This workbook is open read-only." => "이 통합 문서는 읽기 전용으로 열려 있습니다.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "이 통합 문서는 읽기 전용으로 열려 있습니다. 변경하려면 [편집 사용]을 클릭하세요."
+        }
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
         _ => return None,
     })

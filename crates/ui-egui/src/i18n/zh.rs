@@ -402,6 +402,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        // The read-only info bar, title and messages.
+        "Read-only" => "只读",
+        "Read-Only" => "只读",
+        "Enable Editing" => "启用编辑",
+        "This workbook was opened for reading only." => "此工作簿以只读方式打开。",
+        "This workbook was opened for reading. To change it, enable editing." => "此工作簿以阅读方式打开。若要更改，请启用编辑。",
+        "This workbook is open read-only." => "此工作簿处于只读状态。",
+        "This workbook is open read-only. Click Enable Editing to change it." => "此工作簿处于只读状态。若要更改，请单击“启用编辑”。",
         _ => return None,
     })
 }

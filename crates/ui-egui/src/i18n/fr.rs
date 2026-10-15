@@ -410,6 +410,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        // The read-only info bar, title and messages.
+        "Read-only" => "Lecture seule",
+        "Read-Only" => "Lecture seule",
+        "Enable Editing" => "Activer la modification",
+        "This workbook was opened for reading only." => "Ce classeur a été ouvert en lecture seule.",
+        "This workbook was opened for reading. To change it, enable editing." => {
+            "Ce classeur a été ouvert pour être lu. Pour le modifier, activez la modification."
+        }
+        "This workbook is open read-only." => "Ce classeur est ouvert en lecture seule.",
+        "This workbook is open read-only. Click Enable Editing to change it." => {
+            "Ce classeur est ouvert en lecture seule. Pour le modifier, cliquez sur Activer la modification."
+        }
         _ => return None,
     })
 }
