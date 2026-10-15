@@ -13,32 +13,39 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open…",
             ["File"],
             Some("Cmd+O"),
-            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load, {readOnly?: bool}: true opens it for reading only (commands that would change it are refused, and its file isn't written over) until file.enableEditing, and {lockReadOnly?: bool}: true opens it read-only for good (file.enableEditing is refused) → {index, title, sheets, warnings, recalculated, readOnly, lockReadOnly}; a path already open is switched to as it is → {index, alreadyOpen, readOnly, lockReadOnly, recalculateIgnored?, readOnlyIgnored?}",
+            "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json), {recalculate?: bool}: false shows the results stored in the file instead of calculating the formulas again (a formula stored without one is blank until calculated); by default they are calculated again unless the workbook was saved in manual calculation mode and doesn't ask to be calculated on load, {readOnly?: bool}: true opens it for reading only (commands that would change it are refused, and its file isn't written over) until file.enableEditing, and {lockReadOnly?: bool}: true opens it read-only for good (file.enableEditing is refused); these three need `path` or `base64` (no dialog asks for the file) → {index, title, sheets, warnings, recalculated, readOnly, lockReadOnly}; a file already open (however its path is spelled) is switched to as it is → {index, alreadyOpen, readOnly, lockReadOnly, recalculateIgnored?, readOnlyIgnored?}: readOnly or lockReadOnly is refused while it is open for editing, lockReadOnly locks it while it is read-only, and readOnlyIgnored says it stays more read-only than asked",
             always,
             open
         ),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension; a read-only workbook's own file is refused)", has_doc, |s, p| save(s, p, "file.save")),
+        cmd!(
+            noundo "file.save",
+            "Save",
+            ["File"],
+            Some("Cmd+S"),
+            "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension; a read-only workbook's own file is refused, and another path gets a copy: the workbook stays read-only, on its own file)",
+            has_doc,
+            |s, p| save(s, p, "file.save")
+        ),
         cmd!(
             noundo "file.saveAs",
             "Save As…",
             ["File"],
             Some("Cmd+Shift+S"),
-            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; a read-only workbook saves a copy under another name)",
+            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; a read-only workbook saves a copy under another name and stays read-only, on its own file)",
             has_doc,
             save_as
         ),
-        // Not journaled: a recorded script replays edits, on workbooks that may not be read-only.
-        CommandSpec {
-            id: "file.enableEditing",
-            label: "Enable Editing",
-            menu: &[],
-            shortcut: None,
-            params: "{} lets a workbook opened read-only (file.open {readOnly: true}) be changed and saved again; refused for one opened with {lockReadOnly: true} → {readOnly: false}",
-            enabled: can_enable_editing,
-            run: enable_editing,
-            journal: false,
-            undoable: false,
-        },
+        // Journaled: a journal or recorded script that opened a workbook read-only and enabled
+        // editing replays; on a workbook that isn't read-only it does nothing.
+        cmd!(
+            noundo "file.enableEditing",
+            "Enable Editing",
+            [],
+            None,
+            "{} lets a workbook opened read-only (file.open {readOnly: true}) be changed and saved again, in every window on it → {readOnly: false, windows}; refused for one opened with {lockReadOnly: true}; on a workbook that isn't read-only it does nothing → {readOnly: false, alreadyEditable: true}",
+            can_enable_editing,
+            enable_editing
+        ),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
@@ -92,21 +99,17 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
     } else if let Some(path) = str_param(p, "path") {
-        // Already open? Switch to it, as it is: `recalculate` and `readOnly` don't apply.
-        if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
-            s.set_active(i);
-            let d = s.doc()?;
-            let mut r = json!({"index": i, "alreadyOpen": true, "readOnly": d.read_only, "lockReadOnly": d.read_only_locked});
-            if recalculate.is_some() {
-                r["recalculateIgnored"] = json!(true);
-            }
-            if read_only.is_some() {
-                r["readOnlyIgnored"] = json!(true);
-            }
-            return Ok(r);
+        // Already open (the same file, however its path is spelled)? Switch to it.
+        if let Some(i) = s.documents().iter().position(|d| d.path.as_deref().is_some_and(|own| crate::io::same_file(own, path))) {
+            return switch_to_open(s, i, recalculate, read_only, lock_read_only);
         }
         (path.to_string(), crate::io::read_file(path)?)
     } else {
+        // How to open a file needs the file: no dialog asks for it on a programmatic call, and a
+        // file picked in the browser arrives later on its own, so these would be dropped.
+        if let Some(key) = ["recalculate", "readOnly", "lockReadOnly"].into_iter().find(|k| p.get(*k).is_some_and(|v| !v.is_null())) {
+            return Err(bad("file.open", format!("`{key}` needs the file to open: give `path`, or `name` and `base64`")));
+        }
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
     };
@@ -162,28 +165,78 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }))
 }
 
-/// Enable Editing applies to a workbook open read-only, unless it was opened read-only for good.
+/// `file.open` of a file that is already open (document `i`): switches to it, as it is, without
+/// reading the file again, so `recalculate` doesn't apply (`recalculateIgnored`). How it is open
+/// read-only only ever tightens: asking for read-only while it is open for editing is refused (the
+/// caller would get a workbook anything can change), `lockReadOnly` locks a read-only workbook in
+/// every window on it, and asking for less than it is (`readOnly: false`, `lockReadOnly: false`)
+/// leaves it as it is (`readOnlyIgnored`).
+fn switch_to_open(s: &mut Session, i: usize, recalculate: Option<bool>, read_only: Option<bool>, lock: Option<bool>) -> Result<Json> {
+    let d = s.documents().get(i).ok_or(EngineError::NoDocument)?;
+    if read_only == Some(true) && !d.read_only {
+        return Err(bad("file.open", format!("{} is already open for editing; close it to open it read-only", d.display_title())));
+    }
+    let ignored = (read_only == Some(false) && d.read_only) || (lock == Some(false) && d.read_only_locked);
+    let book = d.book;
+    if lock == Some(true) {
+        for w in s.windows_mut(book).filter(|w| w.read_only) {
+            w.read_only_locked = true;
+        }
+    }
+    s.set_active(i);
+    let d = s.doc()?;
+    let mut r = json!({"index": i, "alreadyOpen": true, "readOnly": d.read_only, "lockReadOnly": d.read_only_locked});
+    if recalculate.is_some() {
+        r["recalculateIgnored"] = json!(true);
+    }
+    if ignored {
+        r["readOnlyIgnored"] = json!(true);
+    }
+    Ok(r)
+}
+
+/// Why Enable Editing is refused for a workbook opened read-only for good (`lockReadOnly`).
+const READ_ONLY_LOCKED: &str = "the workbook was opened read-only and can't be switched to editing";
+
+/// Enable Editing is refused only for a workbook opened read-only for good. On a workbook that
+/// isn't read-only it does nothing, so a journal or recorded script that enabled editing replays
+/// where the workbook was opened for editing.
 fn can_enable_editing(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
-    match s.active() {
-        Some(d) if d.read_only_locked => Err("the workbook was opened read-only and can't be switched to editing".into()),
-        Some(d) if d.read_only => Ok(()),
-        _ => Err("the workbook isn't open read-only".into()),
-    }
+    if s.active().is_some_and(|d| d.read_only_locked) { Err(READ_ONLY_LOCKED.into()) } else { Ok(()) }
 }
 
 fn enable_editing(s: &mut Session, _: &Json) -> Result<Json> {
-    s.doc_mut()?.read_only = false;
-    Ok(json!({"readOnly": false}))
+    let d = s.doc()?;
+    if !d.read_only {
+        return Ok(json!({"readOnly": false, "alreadyEditable": true}));
+    }
+    // Every window on the workbook: they are one workbook, and one left read-only would keep the
+    // others from saving to its file.
+    let book = d.book;
+    let mut windows = 0;
+    for w in s.windows_mut(book).filter(|w| !w.read_only_locked) {
+        w.read_only = false;
+        windows += 1;
+    }
+    Ok(json!({"readOnly": false, "windows": windows}))
 }
 
 /// A workbook open read-only never has its file written over: saving or exporting to that file,
 /// from it or from any other workbook, is refused, so it can only be saved as a copy elsewhere.
-pub(crate) fn refuse_read_only_file(s: &Session, id: &str, path: &str) -> Result<()> {
-    let Some(d) = s.documents().iter().find(|d| d.read_only && d.path.as_deref().is_some_and(|own| crate::io::same_file(own, path))) else {
-        return Ok(());
-    };
-    let why = if s.active().is_some_and(|a| a.uid == d.uid) {
+/// [`crate::io::write_file`] writes [`crate::io::temp_path`] first and renames it over the target,
+/// so a target whose temporary file is a read-only workbook's file is refused too. Hosts that
+/// write files themselves check here as well (the control channel's screenshots).
+pub fn refuse_read_only_file(s: &Session, id: &str, path: &str) -> Result<()> {
+    let temp = crate::io::temp_path(path);
+    let owner = s.documents().iter().filter(|d| d.read_only).find_map(|d| {
+        let own = d.path.as_deref()?;
+        if crate::io::same_file(own, path) { Some((d, false)) } else { crate::io::same_file(own, &temp).then_some((d, true)) }
+    });
+    let Some((d, through_temp)) = owner else { return Ok(()) };
+    let why = if through_temp {
+        format!("{} is open read-only, and saving to {path} writes {temp} first; save under another name", d.display_title())
+    } else if s.active().is_some_and(|a| a.uid == d.uid) {
         format!("{READ_ONLY}; save a copy under another name")
     } else {
         format!("{} is open read-only; save under another name", d.display_title())
@@ -216,8 +269,10 @@ fn save(s: &mut Session, p: &Json, id: &str) -> Result<Json> {
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
-    // Only a full-fidelity format clears the dirty flag and becomes the document's file.
-    if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
+    // Only a full-fidelity format clears the dirty flag and becomes the document's file. A
+    // read-only workbook only saves copies: it stays on its own file, where opening that file
+    // again finds it, read-only, and the copy is a file like any other.
+    if !d.read_only && matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }

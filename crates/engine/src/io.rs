@@ -413,10 +413,15 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// The temporary file [`write_file`] writes beside `path` before renaming it over `path`.
+pub fn temp_path(path: &str) -> String {
+    format!("{path}.sctmp")
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    let tmp = format!("{path}.sctmp");
+    let tmp = temp_path(path);
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.

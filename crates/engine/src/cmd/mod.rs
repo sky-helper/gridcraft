@@ -64,7 +64,7 @@ pub const READ_ONLY: &str = "the workbook is open read-only";
 /// Undoable commands a read-only workbook still runs: they only change how a sheet is viewed
 /// (what a file's `<sheetView>` holds: zoom, frozen panes, gridlines, headings, zeros,
 /// right-to-left, formulas shown) or follow a hyperlink, not what the workbook holds.
-const VIEWING: &[&str] = &[
+pub(crate) const VIEWING: &[&str] = &[
     "view.zoom",
     "view.zoom100",
     "view.zoomToSelection",
@@ -84,7 +84,9 @@ const VIEWING: &[&str] = &[
 /// workbook refuses them too: undo and redo put back another version of it, Cut starts a move,
 /// Edit Cell starts an entry, Calculate Now and Calculate Sheet replace the results it shows (a
 /// workbook opened with its stored results keeps them), and Record Actions saves a script in it.
-const EDITS_WITHOUT_UNDO: &[&str] =
+/// Every other command without an undo step only reads, selects, shows, opens, closes or writes
+/// a copy: a test lists them by name, so a new one has to be put on one side or the other.
+pub(crate) const EDITS_WITHOUT_UNDO: &[&str] =
     &["edit.undo", "edit.redo", "edit.cut", "edit.beginEdit", "formulas.calculateNow", "formulas.calculateSheet", "automate.recordActions"];
 
 impl CommandSpec {

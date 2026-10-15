@@ -789,9 +789,11 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let mut copy = crate::DocState::with_recalc((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()), false);
     copy.calc.circular = d.calc.circular.clone();
     copy.selection = d.selection.clone();
-    // A window on a read-only workbook is read-only too.
+    // A window on a read-only workbook is read-only too, until editing is enabled in any window on
+    // it (they are one workbook).
     copy.read_only = d.read_only;
     copy.read_only_locked = d.read_only_locked;
+    copy.book = d.book;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }

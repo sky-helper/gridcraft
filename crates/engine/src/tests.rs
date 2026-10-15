@@ -1816,14 +1816,33 @@ fn reopened_sales(params: serde_json::Value) -> Session {
     let mut p = json!({"name": "sales.xlsx", "base64": book});
     p.as_object_mut().unwrap().extend(params.as_object().unwrap().clone());
     let mut s = Session::new();
-    let r = s.execute("file.open", p).unwrap();
-    assert_eq!(r["readOnly"], json!(true), "{r}");
+    s.execute("file.open", p).unwrap();
     s
 }
 
 /// The sales sample, saved and opened again with `file.open {readOnly: true}`.
 fn read_only_sales() -> Session {
-    reopened_sales(json!({"readOnly": true}))
+    let s = reopened_sales(json!({"readOnly": true}));
+    assert!(s.doc().unwrap().read_only);
+    s
+}
+
+/// A new directory for one native test's files.
+#[cfg(not(target_arch = "wasm32"))]
+fn test_dir(tag: &str) -> std::path::PathBuf {
+    #[allow(clippy::disallowed_methods)] // native-only tests: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-{tag}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+/// A small workbook (A1 = "kept") as `.xlsx` bytes.
+fn kept_book() -> Vec<u8> {
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    crate::io::base64_decode(&b64).unwrap()
 }
 
 /// Whether running `id` was refused because the workbook is open read-only.
@@ -1840,9 +1859,8 @@ fn refused_read_only(s: &mut Session, id: &str, params: serde_json::Value) -> bo
 /// what it allows is neither an undo step nor an unsaved change.
 #[test]
 fn a_read_only_workbook_refuses_edits_and_allows_reading() {
-    let mut s = read_only_sales();
-    let wb = s.doc().unwrap().wb.clone();
-    for (id, params) in [
+    // Edits that change the workbook with these params when it can be changed…
+    let changes = [
         ("cell.set", json!({"cell": "A1", "input": "x"})),
         ("range.setValues", json!({"range": "A1", "values": [[1]]})),
         ("edit.clearContents", json!({"range": "A1:B2"})),
@@ -1855,13 +1873,26 @@ fn a_read_only_workbook_refuses_edits_and_allows_reading() {
         ("edit.paste", json!({"text": "1"})),
         ("formulas.calculationOptions", json!({"mode": "manual"})),
         ("file.properties", json!({"title": "x"})),
+        ("view.customViews", json!({"save": "Mine"})),
+    ];
+    let mut editable = reopened_sales(json!({}));
+    for (id, params) in &changes {
+        let before = editable.doc().unwrap().wb.clone();
+        editable.execute(id, params.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(!std::sync::Arc::ptr_eq(&editable.doc().unwrap().wb, &before), "{id} {params} changes an editable workbook");
+    }
+    // …and those that start a change or replace another one: cutting, editing a cell, undoing,
+    // calculating, recording.
+    let starts = [
         ("edit.cut", json!({"range": "A1"})),
         ("edit.beginEdit", json!({})),
         ("edit.undo", json!({})),
         ("formulas.calculateNow", json!({})),
         ("automate.recordActions", json!({})),
-        ("view.customViews", json!({"save": "Mine"})),
-    ] {
+    ];
+    let mut s = read_only_sales();
+    let wb = s.doc().unwrap().wb.clone();
+    for (id, params) in changes.into_iter().chain(starts) {
         assert!(refused_read_only(&mut s, id, params), "{id}");
         assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &wb), "{id} changed the workbook");
     }
@@ -1906,9 +1937,8 @@ fn content(wb: &gridcraft_model::Workbook) -> gridcraft_model::Workbook {
 }
 
 /// Every command that would change a read-only workbook is refused, whatever its params, before it
-/// runs; every other command leaves what the workbook holds as it was, records no undo step and
-/// leaves no unsaved change. (Commands that open, close or switch workbooks, write files or turn
-/// read-only off have their own tests.)
+/// runs; every other command leaves what the workbook holds as it was. (Commands that open, close
+/// or switch workbooks, write files or turn read-only off have their own tests.)
 #[test]
 fn every_command_respects_a_read_only_workbook() {
     let mut s = read_only_sales();
@@ -1948,12 +1978,164 @@ fn every_command_respects_a_read_only_workbook() {
         let d = s.doc().unwrap();
         assert!(d.read_only, "{}", spec.id);
         assert!(content(&d.wb) == content(&wb), "{} changed the workbook", spec.id);
-        assert!(!d.is_dirty() && d.undo.is_empty(), "{}: dirty {}, {} undo steps", spec.id, d.is_dirty(), d.undo.len());
     }
     // Every undoable command is refused but the few that only change the view.
     let viewing: Vec<&str> = crate::command_specs().iter().filter(|c| c.undoable && !c.edits_workbook()).map(|c| c.id).collect();
     assert_eq!(viewing.len(), 13, "{viewing:?}");
     assert!(viewing.iter().all(|id| id.starts_with("view.") || matches!(*id, "formulas.showFormulas" | "link.open")), "{viewing:?}");
+}
+
+/// The commands without an undo step that a read-only workbook allows: they read, select, find,
+/// copy, show (sheet views, panes, application options, the Watch Window list) or work on windows
+/// and files (opening, closing, and writing copies: Save and the exports refuse the read-only
+/// workbook's own file themselves), or turn read-only off.
+const ALLOWED_WITHOUT_UNDO: &[&str] = &[
+    // Reading.
+    "document.inspect",
+    "sheet.read",
+    "cell.get",
+    "selection.stats",
+    "history.list",
+    "app.commands",
+    "data.validate",
+    "data.circleInvalid",
+    "data.scenarioManager",
+    "data.queriesConnections",
+    "formulas.functions",
+    "formulas.recentlyUsed",
+    "formulas.financial",
+    "formulas.logical",
+    "formulas.text",
+    "formulas.dateTime",
+    "formulas.lookupReference",
+    "formulas.mathTrig",
+    "formulas.moreFunctions",
+    "formulas.nameManager",
+    "formulas.tracePrecedents",
+    "formulas.traceDependents",
+    "formulas.removeArrows",
+    "formulas.errorChecking",
+    "formulas.evaluateFormula",
+    "formulas.evaluate",
+    "insert.chartRecommendations",
+    "pivot.fields",
+    "pivot.fieldList",
+    "pivot.list",
+    "review.workbookStatistics",
+    "review.checkAccessibility",
+    "review.spelling",
+    "review.thesaurus",
+    "automate.allScripts",
+    "view.macros",
+    "arrange.selectionPane",
+    "home.addIns",
+    "file.options",
+    "file.printPreview",
+    "view.switchWindows",
+    // Selecting, finding, copying.
+    "selection.set",
+    "selection.move",
+    "selection.next",
+    "selection.currentRegion",
+    "selection.row",
+    "selection.column",
+    "edit.selectAll",
+    "edit.goTo",
+    "edit.goToSpecial",
+    "edit.find",
+    "review.previousComment",
+    "review.nextComment",
+    "sheet.activate",
+    "sheet.next",
+    "sheet.previous",
+    "edit.copy",
+    "edit.clearClipboard",
+    // Showing: sheet views, panes, application options (Custom Views refuses to save or delete).
+    "view.normal",
+    "view.pageLayout",
+    "view.pageBreakPreview",
+    "view.customViews",
+    "view.split",
+    "view.ruler",
+    "view.formulaBar",
+    "review.showComments",
+    "review.showAllNotes",
+    "formulas.watchWindow",
+    "draw.pen",
+    "draw.eraser",
+    "draw.lasso",
+    "review.addToDictionary",
+    // Windows and files.
+    "view.newWindow",
+    "view.arrangeAll",
+    "view.hideWindow",
+    "view.unhideWindow",
+    "window.activate",
+    "file.new",
+    "file.open",
+    "file.close",
+    "file.save",
+    "file.saveAs",
+    "file.saveBytes",
+    "file.exportCsv",
+    "file.exportHtml",
+    "file.exportPdf",
+    "file.print",
+    "file.enableEditing",
+];
+
+/// Every command without an undo step is named as one a read-only workbook allows
+/// ([`ALLOWED_WITHOUT_UNDO`]) or refuses ([`crate::cmd::EDITS_WITHOUT_UNDO`]), so a new one has to
+/// be put on one side: one that changed the workbook and was let through would let a read-only
+/// workbook change. Both lists name registered commands without an undo step, once.
+#[test]
+fn every_command_without_undo_is_classified_for_read_only() {
+    use crate::cmd::EDITS_WITHOUT_UNDO;
+    let unclassified: Vec<&str> = crate::command_specs()
+        .iter()
+        .filter(|c| !c.undoable && !ALLOWED_WITHOUT_UNDO.contains(&c.id) && !EDITS_WITHOUT_UNDO.contains(&c.id))
+        .map(|c| c.id)
+        .collect();
+    assert!(
+        unclassified.is_empty(),
+        "say whether a read-only workbook allows these (ALLOWED_WITHOUT_UNDO) or refuses them (EDITS_WITHOUT_UNDO): {unclassified:?}"
+    );
+    for (i, id) in ALLOWED_WITHOUT_UNDO.iter().chain(EDITS_WITHOUT_UNDO).enumerate() {
+        let spec = crate::command_specs().iter().find(|c| c.id == *id).unwrap_or_else(|| panic!("`{id}` isn't a command"));
+        assert!(!spec.undoable, "`{id}` is an undo step: a read-only workbook refuses it unless it is a viewing command");
+        assert!(!ALLOWED_WITHOUT_UNDO.iter().chain(EDITS_WITHOUT_UNDO).take(i).any(|other| other == id), "`{id}` is listed twice");
+    }
+    for id in EDITS_WITHOUT_UNDO {
+        assert!(crate::command_specs().iter().any(|c| c.id == *id && c.edits_workbook()), "{id}");
+    }
+}
+
+/// The viewing commands a read-only workbook lets through are registered undo steps: an id that
+/// isn't a command, or isn't an undo step, would silently let nothing through.
+#[test]
+fn the_viewing_commands_a_read_only_workbook_allows_are_registered() {
+    for id in crate::cmd::VIEWING {
+        let spec = crate::command_specs().iter().find(|c| c.id == *id).unwrap_or_else(|| panic!("`{id}` isn't a command"));
+        assert!(spec.undoable && !spec.edits_workbook(), "{id}");
+    }
+}
+
+/// What a read-only workbook allows isn't an edit: zooming and freezing panes change how it shows,
+/// as in any workbook, but record no undo step and leave no unsaved change, while once editing is
+/// enabled they are undo steps, and frozen panes an unsaved change, as in any workbook.
+#[test]
+fn viewing_a_read_only_workbook_is_neither_an_undo_step_nor_a_change() {
+    let mut s = read_only_sales();
+    s.execute("view.zoom", json!({"percent": 150})).unwrap();
+    s.execute("view.freezePanes", json!({"cell": "B2"})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.active().unwrap().zoom, d.wb.active().unwrap().freeze), (150, Some((1, 1))));
+    assert!(!d.is_dirty() && d.undo.is_empty(), "dirty {}, {} undo steps", d.is_dirty(), d.undo.len());
+    s.execute("file.enableEditing", json!({})).unwrap();
+    s.execute("view.zoom", json!({"percent": 120})).unwrap();
+    s.execute("view.unfreezePanes", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.is_dirty() && d.undo.len() == 2, "dirty {}, {} undo steps", d.is_dirty(), d.undo.len());
 }
 
 /// `file.open {lockReadOnly: true}` opens a workbook read-only for good: it can't be switched to
@@ -1989,12 +2171,12 @@ fn a_locked_read_only_workbook_cannot_be_switched_to_editing() {
     s.execute("file.enableEditing", json!({})).unwrap();
 }
 
-/// `file.enableEditing` turns read-only off (Excel's Enable Editing). It isn't an undo step: undo
-/// then undoes edits, not the switch. Without a read-only workbook there's nothing to enable.
+/// `file.enableEditing` turns read-only off. It isn't an undo step: undo then undoes edits, not the
+/// switch. On a workbook that isn't read-only it does nothing, and says so.
 #[test]
 fn enable_editing_lets_a_read_only_workbook_change() {
     let mut s = read_only_sales();
-    assert_eq!(s.execute("file.enableEditing", json!({})).unwrap(), json!({"readOnly": false}));
+    assert_eq!(s.execute("file.enableEditing", json!({})).unwrap(), json!({"readOnly": false, "windows": 1}));
     let d = s.doc().unwrap();
     assert!(d.undo.is_empty() && !d.is_dirty());
     s.execute("cell.set", json!({"cell": "J1", "input": "7"})).unwrap();
@@ -2004,13 +2186,15 @@ fn enable_editing_lets_a_read_only_workbook_change() {
     assert!(s.doc().unwrap().undo.is_empty());
     s.execute("cell.set", json!({"cell": "J1", "input": "8"})).unwrap();
     assert_eq!(v(&s, "J1"), Value::Number(8.0));
-    let err = s.execute("file.enableEditing", json!({})).unwrap_err();
-    assert!(matches!(&err, crate::EngineError::Disabled(..)) && err.to_string().contains("isn't open read-only"), "{err}");
+    let undo = s.doc().unwrap().undo.len();
+    assert_eq!(s.execute("file.enableEditing", json!({})).unwrap(), json!({"readOnly": false, "alreadyEditable": true}));
+    assert_eq!((s.doc().unwrap().undo.len(), v(&s, "J1")), (undo, Value::Number(8.0)), "nothing changed");
     assert_eq!(s.execute("document.inspect", json!({})).unwrap()["readOnly"], json!(false));
 }
 
 /// The command list says which commands a read-only workbook refuses and why, and that Enable
-/// Editing is available; after it, the reverse.
+/// Editing is available; after it, the edits are available (Enable Editing stays available, doing
+/// nothing).
 #[test]
 fn the_command_list_reports_what_a_read_only_workbook_refuses() {
     let mut s = read_only_sales();
@@ -2027,22 +2211,20 @@ fn the_command_list_reports_what_a_read_only_workbook_refuses() {
     assert_eq!(l["undo"]["disabled_reason"], json!(READ_ONLY), "read-only comes before nothing to undo");
     s.execute("file.enableEditing", json!({})).unwrap();
     let l = list(&mut s);
-    assert_eq!((l["bold"]["enabled"].clone(), l["enable"]["enabled"].clone()), (json!(true), json!(false)));
+    assert_eq!((l["bold"]["enabled"].clone(), l["enable"]["enabled"].clone()), (json!(true), json!(true)));
     assert!(l["bold"].get("disabled_reason").is_none());
     assert_eq!(l["undo"]["disabled_reason"], json!("nothing to undo"));
 }
 
 /// A read-only workbook's own file is never written: Save, Save As and exports over it are refused
-/// (whatever spelling of its path), while a copy under another name, or as bytes, is fine and
-/// leaves the workbook read-only. `file.open` reports `readOnly`; an open path is switched to as it
-/// is (`readOnlyIgnored`), and a `readOnly` that isn't true or false is refused before reading.
+/// (whatever spelling of its path), while a copy under another name, or as bytes, is fine. The
+/// copy doesn't become its file, as it would for a workbook open for editing: the workbook stays
+/// read-only, on its own file, and the copy opens for editing like any file. `file.open` reports
+/// `readOnly`, and a `readOnly` that isn't true or false is refused before reading.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_read_only_workbook_is_saved_only_as_a_copy() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("gridcraft-read-only-{}-{nonce}", std::process::id()));
-    std::fs::create_dir(&dir).unwrap();
+    let dir = test_dir("read-only");
     let path = dir.join("stored.xlsx");
     let bytes = crate::io::base64_decode(&stored_results_workbook("", STALE_A1)).unwrap();
     std::fs::write(&path, &bytes).unwrap();
@@ -2079,12 +2261,19 @@ fn a_read_only_workbook_is_saved_only_as_a_copy() {
     s.execute("file.saveAs", json!({"path": copy})).unwrap();
     assert!(copy.exists());
     assert!(s.execute("file.saveBytes", json!({})).unwrap()["base64"].is_string());
-    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["readOnly"], json!(true), "a copy leaves the workbook read-only");
-    assert!(refused_read_only(&mut s, "file.save", json!({})), "the copy is now its file, and isn't written over either");
-    // Opening an open file again switches to it as it is.
-    let again = s.execute("file.open", json!({"path": copy, "readOnly": false})).unwrap();
+    let info = s.execute("document.inspect", json!({})).unwrap();
+    assert_eq!((info["readOnly"].clone(), info["path"].clone()), (json!(true), json!(path)), "the workbook stays read-only, on its own file");
+    assert!(refused_read_only(&mut s, "file.save", json!({})), "Save still means its own file");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the file is untouched");
+    // The copy is a file like any other: it opens for editing.
+    let opened = s.execute("file.open", json!({"path": copy})).unwrap();
+    assert_eq!((opened["readOnly"].clone(), opened.get("alreadyOpen")), (json!(false), None));
+    s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    // Opening the read-only workbook's file again switches to it, as it is.
+    let again = s.execute("file.open", json!({"path": path, "readOnly": false})).unwrap();
     assert_eq!((again["alreadyOpen"].clone(), again["readOnlyIgnored"].clone(), again["readOnly"].clone()), (json!(true), json!(true), json!(true)));
-    let plain = s.execute("file.open", json!({"path": copy})).unwrap();
+    let plain = s.execute("file.open", json!({"path": path})).unwrap();
     assert_eq!((plain.get("readOnlyIgnored"), plain["readOnly"].clone()), (None, json!(true)));
     // A CSV opened read-only isn't exported over either.
     s.execute("file.open", json!({"path": csv, "readOnly": true})).unwrap();
@@ -2092,12 +2281,192 @@ fn a_read_only_workbook_is_saved_only_as_a_copy() {
     assert_eq!(std::fs::read_to_string(&csv).unwrap(), "a,1\nb,2\n");
     // Nor is another workbook saved over a read-only one's file.
     s.execute("file.new", json!({})).unwrap();
-    let err = s.execute("file.saveAs", json!({"path": copy})).unwrap_err();
-    assert!(matches!(&err, crate::EngineError::Disabled(..)) && err.to_string().contains("copy.xlsx is open read-only"), "{err}");
+    let err = s.execute("file.saveAs", json!({"path": path})).unwrap_err();
+    assert!(matches!(&err, crate::EngineError::Disabled(..)) && err.to_string().contains("stored.xlsx is open read-only"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the file is untouched");
     // Opened without readOnly, it saves as before.
     let mut s = self::s();
     assert_eq!(s.execute("file.open", json!({"path": path})).unwrap()["readOnly"], json!(false));
     s.execute("file.save", json!({})).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `file.enableEditing` is journaled, so a journal or a recorded script that opened a workbook
+/// read-only, enabled editing and edited it replays (it used to stop at the edit, the replayed
+/// workbook left read-only).
+#[test]
+fn journals_and_recorded_scripts_replay_enable_editing() {
+    let book = crate::io::base64_encode(&kept_book());
+    let open = json!({"name": "b.xlsx", "base64": book, "readOnly": true});
+    let mut s = Session::new();
+    s.execute("file.open", open.clone()).unwrap();
+    s.execute("file.enableEditing", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    let ids: Vec<&str> = s.journal.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, ["file.open", "file.enableEditing", "cell.set"]);
+    let mut replay = Session::new();
+    for (id, p) in s.journal.clone() {
+        replay.execute(&id, p).unwrap_or_else(|e| panic!("replaying {id}: {e}"));
+    }
+    assert_eq!(v(&replay, "B1"), Value::Number(7.0));
+    // A script recorded the same way runs.
+    let mut s = self::s();
+    s.execute("automate.recordActions", json!({})).unwrap();
+    s.execute("file.open", open).unwrap();
+    s.execute("file.enableEditing", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    s.execute("automate.recordActions", json!({"stop": true, "name": "Open and edit"})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Open and edit"})).unwrap();
+    assert_eq!(s.documents().len(), 2, "the script opened the workbook again");
+    assert!(!s.doc().unwrap().read_only);
+    assert_eq!(v(&s, "B1"), Value::Number(7.0));
+}
+
+/// The windows on a workbook (`view.newWindow`) are read-only together: Enable Editing in any of
+/// them enables all of them, so the window it was enabled in saves to the workbook's file (it used
+/// to be refused: the other window kept that file read-only). Other workbooks stay as they are.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn enabling_editing_in_a_new_window_enables_the_workbook() {
+    let dir = test_dir("read-only-windows");
+    let path = dir.join("book.xlsx");
+    std::fs::write(&path, kept_book()).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "other.xlsx", "base64": crate::io::base64_encode(&kept_book()), "readOnly": true})).unwrap();
+    for enable_in in [2, 1] {
+        s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+        s.execute("view.newWindow", json!({})).unwrap();
+        assert_eq!(s.documents().len(), 3);
+        s.set_active(enable_in);
+        assert_eq!(s.execute("file.enableEditing", json!({})).unwrap(), json!({"readOnly": false, "windows": 2}));
+        assert_eq!(s.documents().iter().map(|d| d.read_only).collect::<Vec<_>>(), [true, false, false], "both windows, not the other workbook");
+        s.execute("cell.set", json!({"cell": "B1", "input": enable_in.to_string()})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        let mut check = Session::new();
+        check.execute("file.open", json!({"path": path})).unwrap();
+        assert_eq!(v(&check, "B1"), Value::Number(enable_in as f64), "saved from window {enable_in}");
+        for i in [2, 1] {
+            s.close_document(i);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// How to open a file (`recalculate`, `readOnly`, `lockReadOnly`) needs the file: without `path`
+/// or `base64` they are refused, rather than dropped on the way through the File › Open dialog
+/// (which a programmatic call never opens anyway), and nothing opens. Without them File › Open asks
+/// for a file, as before.
+#[test]
+fn open_flags_need_a_file() {
+    let mut s = s();
+    for (key, value) in [("readOnly", true), ("lockReadOnly", true), ("recalculate", false), ("readOnly", false)] {
+        let mut p = json!({"password": "x"});
+        p[key] = json!(value);
+        let err = s.execute("file.open", p).unwrap_err();
+        assert!(matches!(&err, crate::EngineError::BadParams { .. }), "{key}: {err}");
+        assert!(err.to_string().contains(&format!("`{key}`")) && err.to_string().contains("`path`"), "{key}: {err}");
+    }
+    assert_eq!(s.take_ui_requests(), vec![], "no dialog asks for a file");
+    assert_eq!(s.documents().len(), 1);
+    for p in [json!({}), json!({"readOnly": null})] {
+        s.execute("file.open", p).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::Dialog("open".into(), json!({}))]);
+    }
+}
+
+/// Opening a file that is already open never loosens how it is open: asking for read-only while it
+/// is open for editing is refused, leaving it (and which workbook is active) as it was;
+/// `lockReadOnly` locks it while it is read-only, in every window on it; asking for less than it
+/// is leaves it as it is (`readOnlyIgnored`).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn opening_an_open_file_never_loosens_read_only() {
+    let dir = test_dir("read-only-reopen");
+    let path = dir.join("book.xlsx");
+    std::fs::write(&path, kept_book()).unwrap();
+    let mut s = self::s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    for params in [json!({"lockReadOnly": true}), json!({"readOnly": true}), json!({"readOnly": true, "lockReadOnly": false})] {
+        let mut p = params.clone();
+        p["path"] = json!(path);
+        let err = s.execute("file.open", p).unwrap_err();
+        assert!(err.to_string().contains("book.xlsx is already open for editing"), "{params}: {err}");
+        assert_eq!(s.active_index(), 1, "{params}: it isn't switched to either");
+    }
+    let r = s.execute("file.open", json!({"path": path, "readOnly": false})).unwrap();
+    assert_eq!((r["alreadyOpen"].clone(), r["readOnly"].clone(), r.get("readOnlyIgnored")), (json!(true), json!(false), None));
+    s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+    // Open read-only: lockReadOnly locks it, in every window on it.
+    let mut s = self::s();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    s.execute("view.newWindow", json!({})).unwrap();
+    let r = s.execute("file.open", json!({"path": path, "lockReadOnly": true})).unwrap();
+    assert_eq!((r["alreadyOpen"].clone(), r["lockReadOnly"].clone(), r.get("readOnlyIgnored")), (json!(true), json!(true), None));
+    assert!(s.documents().iter().all(|d| d.read_only && d.read_only_locked));
+    for i in 0..2 {
+        s.set_active(i);
+        assert!(s.execute("file.enableEditing", json!({})).is_err(), "window {i}");
+    }
+    for params in [json!({"readOnly": false}), json!({"readOnly": true, "lockReadOnly": false}), json!({"lockReadOnly": false})] {
+        let mut p = params.clone();
+        p["path"] = json!(path);
+        let r = s.execute("file.open", p).unwrap();
+        assert_eq!(
+            (r["readOnly"].clone(), r["lockReadOnly"].clone(), r["readOnlyIgnored"].clone()),
+            (json!(true), json!(true), json!(true)),
+            "{params}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A file already open is found however its path is spelled (`dir/./book.xlsx`, a link), as the
+/// read-only workbook's file is when saving: it is switched to, still read-only, rather than opened
+/// again as a second workbook anything can change.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn an_open_file_is_found_under_another_spelling() {
+    let dir = test_dir("read-only-spelling");
+    let path = dir.join("book.xlsx");
+    std::fs::write(&path, kept_book()).unwrap();
+    let mut other = vec![dir.join(".").join("book.xlsx")];
+    #[cfg(unix)]
+    {
+        let link = dir.join("link.xlsx");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        other.push(link);
+    }
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    for p in &other {
+        let r = s.execute("file.open", json!({"path": p})).unwrap();
+        assert_eq!((r["alreadyOpen"].clone(), r["readOnly"].clone()), (json!(true), json!(true)), "{p:?}");
+        assert_eq!(s.documents().len(), 1, "{p:?}");
+        assert!(refused_read_only(&mut s, "cell.set", json!({"cell": "B1", "input": "7"})), "{p:?}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Saving writes `<path>.sctmp` and renames it over `<path>`: a save whose temporary file is a
+/// read-only workbook's file is refused, from any workbook, rather than writing over that file and
+/// moving it away.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_whose_temporary_file_is_a_read_only_workbook_is_refused() {
+    let dir = test_dir("read-only-temp");
+    let own = dir.join("book.xlsx.sctmp");
+    let bytes = kept_book();
+    std::fs::write(&own, &bytes).unwrap();
+    let target = dir.join("book.xlsx");
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": own, "readOnly": true})).unwrap();
+    let err = s.execute("file.saveAs", json!({"path": target})).unwrap_err();
+    assert!(matches!(&err, crate::EngineError::Disabled(..)) && err.to_string().contains("book.xlsx.sctmp is open read-only"), "{err}");
+    s.execute("file.new", json!({})).unwrap();
+    assert!(matches!(s.execute("file.saveAs", json!({"path": target})), Err(crate::EngineError::Disabled(..))), "nor from another workbook");
+    assert_eq!(std::fs::read(&own).unwrap(), bytes, "the read-only workbook's file is untouched");
+    assert!(!target.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

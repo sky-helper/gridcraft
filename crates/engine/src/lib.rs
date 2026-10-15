@@ -119,6 +119,10 @@ pub struct DocState {
     /// Read-only for good (`file.open {lockReadOnly: true}`): `file.enableEditing` is refused, so
     /// only reopening the file makes it editable.
     pub read_only_locked: bool,
+    /// The workbook this document is a window on: its own `uid`, or for a window `view.newWindow`
+    /// opened, that of the window it was opened from. The windows on one workbook are read-only
+    /// together: `file.enableEditing` in one of them turns read-only off in all of them.
+    pub book: u64,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -143,6 +147,7 @@ impl DocState {
         }
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let uid = NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         DocState {
             saved: wb.clone(),
             wb,
@@ -152,13 +157,14 @@ impl DocState {
             redo: vec![],
             path,
             revision: 1,
-            uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            uid,
             title,
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
             read_only: false,
             read_only_locked: false,
+            book: uid,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -311,6 +317,10 @@ impl Session {
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
+    }
+    /// The windows on one workbook ([`DocState::book`]).
+    pub(crate) fn windows_mut(&mut self, book: u64) -> impl Iterator<Item = &mut DocState> {
+        self.docs.iter_mut().filter(move |d| d.book == book)
     }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
