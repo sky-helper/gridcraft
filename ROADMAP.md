@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (sheets without page setup keep the default paper on save; row heights saved in a file are kept on open and save; workbooks can open with their stored results instead of recalculating; the web build takes control requests from the page that embeds it; a host adds fonts at runtime: CJK on the web build) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (sheets without page setup keep the default paper on save; row heights saved in a file are kept on open and save; workbooks can open with their stored results instead of recalculating; the web build takes control requests from the page that embeds it; a host adds fonts at runtime: CJK on the web build; the web build shows a CJK interface once added fonts draw it) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | Opening and saving a file keeps the row heights it saved: only rows saved without a height are fitted on open, a saved height is read even when it equals the default (a 15pt row on a 14.25pt sheet came back 14.25pt), and merged cells no longer size their row (a wrapped paragraph merged across columns grew it to 409.5pt), while an edit never shrinks a row merged cells cross |
 | 2026-10-15 | Open without recalculating: `file.open {recalculate: false}` shows the results stored in the file (a `TODAY()` keeps its saved date; array results included), and a workbook saved in manual calculation mode opens that way unless it asks for a full calculation on load (`fullCalcOnLoad`, `.xls` `Uncalced`); in automatic mode the first edit then recalculates its dependents along with the formulas recalculated after every edit (volatile functions, defined names, table references…) |
 | 2026-10-15 | Web: the page that embeds GridCraft (`?host=parent`) drives the control channel over `postMessage` (`gridcraft:control` / `gridcraft:reply`, run in order with the workbooks it sends), opens workbooks from bytes with `app.open`, and gets a requested PDF in the reply instead of a download; a workbook it keeps from Save counts as saved at that moment |
+| 2026-10-15 | Web build: a Chinese, Japanese or Korean browser language, or the embedding page's `?lang=`, is used once the fonts the page added draw that interface (English until then, no boxes); a language picked by hand is kept |
 | 2026-10-15 | Fonts: a host adds fonts while the app runs (`app.font.add {name, base64, index?}`, or `gridcraft:font` from a page embedding the web build); every family falls back on them, so the web build, which has no system fonts, can draw Chinese, Japanese and Korean text |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
@@ -202,6 +203,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | minor | Progress log: row heights saved in a file kept on open and save |
 | 2026-10-15 | minor | Progress log: open without recalculating; manual calculation mode kept on open |
 | 2026-10-15 | minor | Progress log: control channel over `postMessage` in the web build |
+| 2026-10-15 | minor | Progress log: CJK interface languages on the web build once added fonts draw them |
 | 2026-10-15 | minor | Progress log: fonts added at runtime (CJK on the web build) |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |

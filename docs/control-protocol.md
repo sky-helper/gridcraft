@@ -63,14 +63,26 @@ before it (the first one added wins where two cover the same character), so text
 other fonts lack draws with it. It returns `{name, added, covers: {hangul, han, kana}}`: `added` is
 false when a font of that name was already added, which is then left as it was; `covers` is a hint
 from a few sample characters of each script in the font's character map, not a check of every
-character. A file egui can't read, one over 64 MiB, or a font past 32 (256 MiB in all) is refused;
-over the desktop channel the base64 text has to fit a 64 MiB line, so about 48 MiB of font is the
-practical limit there. Added fonts stay, one copy each, until the app quits. The web build has no
-system fonts, so a page that embeds it (`?host=parent`) sends its CJK fonts as `gridcraft:font`
+character. A file egui can't read, one it can't draw from (no glyph outlines, as in a file cut off
+in transfer after its character map, or no units per em), one over 64 MiB, or a font past 32
+(256 MiB in all) is refused, with an error that says which; over the desktop channel the base64
+text has to fit a 64 MiB line, so about 48 MiB of font is the practical limit there. Added fonts
+stay, one copy each, until the app quits. The web build has no system fonts, so a page that
+embeds it (`?host=parent`) sends its CJK fonts as `gridcraft:font`
 messages (`{name, bytes, index?}`, bytes an `ArrayBuffer` or `Uint8Array`; see
 `apps/gridcraft-web/src/host.rs`), each answered with `gridcraft:fontResult`, in this order:
 `gridcraft:ready` (from GridCraft, with `"font"` in `capabilities`), then `gridcraft:font`, then
 `gridcraft:open`, so the workbook's first frame already has the glyphs.
+
+The web build saves no preferences: each visit starts in the browser's language, or in the one
+the page's URL asks for with `lang` (`index.html?host=parent&lang=ko`; any language code
+`app.language.set` takes, an unknown one is ignored). A Chinese, Japanese or Korean interface
+needs fonts the build doesn't have, so it shows English until the fonts added draw every East
+Asian character of that interface's labels (checked against their character maps, not just
+`covers`: a Korean font with Hanja and kana still lacks most of the Simplified Chinese interface;
+a refused font, such as one cut off in transfer, counts for nothing), then switches in the frame
+after the `gridcraft:fontResult`. A language the user picks in the View tab or File › Options is
+kept: fonts that arrive later don't change it.
 
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
 workbook (Agile or Standard encryption). Without `password` it returns an error containing

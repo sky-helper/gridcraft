@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build; Korean catalog: dialogs, menus and tooltips) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build; Korean catalog: dialogs, menus and tooltips; the web build shows a CJK interface once added fonts draw it) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -29,8 +29,10 @@ right-to-left sheets and full complex-script support. Part of
   #142 is still open pending confirmation). The web build has no system fonts; a host adds fonts
   while the app runs (`app.font.add`, or `gridcraft:font` from a page embedding the web build),
   and every family falls back on them, so CJK text can render there once the page sends a face.
-  The web build still won't switch to a CJK interface language by itself. There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
+  The web build follows the browser's language, or the page's `?lang=`, into Chinese, Japanese or
+  Korean once the added fonts draw every East Asian character of its labels, and shows English
+  until then; a language picked in the View tab is kept. There is no complex-text shaping: Arabic
+  and Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
@@ -81,6 +83,9 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Web build CJK interface, after review: tests (on any machine) that a font cut off in transfer leaves it in English and that `covers` from sample characters is not the label check; the Chinese catalog is held to the Japanese keys the check lists and the Korean one to Hangul (no Han or kana), so the Korean catalog can grow; wording says every East Asian character |
+| 2026-10-15 | minor | Web build: a Chinese, Japanese or Korean browser language, or the page's `?lang=`, is used once the fonts the page added draw every East Asian character of that interface's labels (English until then); a language picked by hand is kept |
+| 2026-10-15 | trivial | A font a host adds that egui can't draw from is refused: no glyph outlines (a file cut off in transfer after its character map would take characters and draw them blank) or no units per em (infinite glyph scale) |
 | 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
 | 2026-10-15 | minor | Korean catalog (`i18n/ko.rs`) grows from 398 to 973 entries (~44%): every key the other catalogs translate, plus three that are looked up through `Language::tr` but were in no catalog (Format Cells' No Color and protection note, the sheet navigator's All sheets); `Size` now reads 크기, so the Format Cells font-size slider no longer says 용지 크기 (paper size). About 230 of the new entries show today (ribbon tooltips and menus, dialog titles and OK/Cancel, Format Cells, the PivotTable Fields pane, cell and header context menus); the rest show once their dialogs, panes and messages look up the catalog |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |

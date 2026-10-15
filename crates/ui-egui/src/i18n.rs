@@ -2,10 +2,16 @@
 //! translated. Untranslated labels fall back to English, so coverage can grow incrementally.
 //!
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
-//! to the system's language ([`Language::system`]), and the View tab switches it by hand.
+//! to the system's language ([`Language::system`]), and the View tab switches it by hand. The web
+//! build saves no preference: it starts in the browser's language, or in the one its page's URL
+//! asks for with `?lang=`.
 //!
 //! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
 //! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
+//! The web build has no system fonts: the page embedding it adds fonts while it runs
+//! ([`crate::theme::add_font`]), and it shows a Chinese, Japanese or Korean interface only once
+//! those fonts draw every East Asian character of the labels ([`interface_text`]), English until
+//! then.
 
 use serde::{Deserialize, Serialize};
 
@@ -155,6 +161,16 @@ pub fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Language, D::Er
 /// value), which starts from [`Language::system`] instead.
 pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
     ui_json.get("language").and_then(serde_json::Value::as_str).and_then(Language::parse)
+}
+
+/// The interface text in `language`: its own name and its label for every key of the Japanese
+/// table. Tests hold the catalogs to those keys: every other table translates each of them, and
+/// the Chinese table translates no others, so none of its labels is left out (Chinese fonts
+/// differ in which Han characters they have). The Korean table may translate more keys, but uses
+/// no Han or kana: its Hangul is one block, which Korean fonts cover whole. What a font has to
+/// draw for that interface to show no boxes (see [`crate::theme::extra_fonts_draw`]).
+pub fn interface_text(language: Language) -> impl Iterator<Item = &'static str> {
+    std::iter::once(language.name()).chain(JAPANESE.iter().map(move |(key, _)| language.tr(key)))
 }
 
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
@@ -724,5 +740,60 @@ mod tests {
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+
+    #[test]
+    fn the_interface_text_is_every_label_in_that_language() {
+        for language in Language::ALL {
+            let text: Vec<&str> = interface_text(language).collect();
+            assert_eq!(text.len(), JAPANESE.len() + 1, "{language:?}: its name and a label per key");
+            assert_eq!(text.first(), Some(&language.name()));
+            assert!(text.iter().all(|label| !label.is_empty()), "{language:?}");
+        }
+        let korean: Vec<&str> = interface_text(Language::Ko).collect();
+        assert!(korean.contains(&"데이터") && korean.contains(&"인터페이스 언어"));
+        let english: Vec<&str> = interface_text(Language::En).collect();
+        assert!(english.contains(&"Orientation") && !english.iter().any(|label| label.contains('|')), "English shows keys without their context");
+    }
+
+    #[test]
+    fn the_cjk_catalogs_stay_within_what_the_font_check_covers() {
+        // `interface_text` lists the labels by the Japanese table's keys: a key only the Chinese
+        // table had would show a label the web build never checks against its fonts, and Chinese
+        // fonts differ in which Han characters they have.
+        let mut keys = 0;
+        for line in include_str!("i18n/zh.rs").lines() {
+            let Some((key, _)) = line.trim().strip_prefix('"').and_then(|l| l.split_once("\" =>")) else { continue };
+            let key = key.replace("\\n", "\n").replace("\\\"", "\"");
+            assert!(JAPANESE.iter().any(|(k, _)| *k == key), "zh: {key:?} is never checked against the fonts");
+            keys += 1;
+        }
+        assert_eq!(keys, JAPANESE.len(), "zh: every key was read");
+        // The Korean table may translate more keys (catalogs grow) as long as it uses no Han or
+        // kana: its Hangul is one block, which Korean fonts cover whole.
+        let han_or_kana =
+            |c: char| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}');
+        assert!(!include_str!("i18n/ko.rs").chars().any(han_or_kana), "ko: a label uses Han or kana, which the font check doesn't cover");
+    }
+
+    #[test]
+    fn a_language_picked_in_this_run_is_noted_but_not_saved() {
+        let fresh = || crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
+        let mut app = fresh();
+        assert!(!app.ui.language_chosen, "nothing picked yet");
+        assert!(app.run("app.language.set", serde_json::json!({"language": "xx"})).is_err());
+        assert!(!app.ui.language_chosen, "an unknown language picks nothing");
+        app.run("app.language.set", serde_json::json!({"language": "de"})).unwrap();
+        assert!(app.ui.language_chosen);
+        for id in ["app.language.english", "app.language.japanese"] {
+            let mut app = fresh();
+            app.run(id, serde_json::json!({})).unwrap();
+            assert!(app.ui.language_chosen, "{id}");
+        }
+        let saved = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(saved.get("languageChosen"), None, "only the language is saved: {saved}");
+        let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+        assert!(!restored.language_chosen);
+        assert_eq!(restored.language, Language::De);
     }
 }

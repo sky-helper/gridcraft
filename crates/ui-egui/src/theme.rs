@@ -199,7 +199,7 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
 /// collection index past the end is rejected instead of crashing the app (#226). A face whose
 /// character map is unreadable (a truncated file) would open but draw nothing, so it is refused
 /// too and the next candidate gets its turn.
-pub(crate) fn font_parses(bytes: &[u8], index: u32) -> bool {
+pub fn font_parses(bytes: &[u8], index: u32) -> bool {
     use skrifa::MetadataProvider;
     skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| font.charmap().has_map())
 }
@@ -408,9 +408,10 @@ static EXTRA_FONT_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 /// glyphs (`app.font.add`, the web host's `gridcraft:font`). `index` picks the face in a
 /// collection; TrueType and OpenType files only (not WOFF). The checks run in this order: the
 /// name, a name already added (ignored: its first font stays, `added` is false), the size, how
-/// many fonts there are, then the face itself, which egui would panic on if it can't read it.
-/// The bytes are kept once, for the life of the app. Font sets built from now on carry the font;
-/// the app rebuilds its own at the next frame.
+/// many fonts there are, then the face itself: one egui can't read (it would panic) is refused,
+/// and so is one it can't draw from (no glyph outlines, as in a file cut off after its character
+/// map, or no units per em). The bytes are kept once, for the life of the app. Font sets built
+/// from now on carry the font; the app rebuilds its own at the next frame.
 pub fn add_font(name: &str, bytes: Vec<u8>, index: u32) -> Result<FontAdded, String> {
     let mut fonts = EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let added = add_extra(&mut fonts, name, bytes, index)?;
@@ -443,6 +444,39 @@ pub fn extra_font_count() -> usize {
     EXTRA_FONT_COUNT.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// Whether the fonts [`add_font`] has added draw, between them, every East Asian character of
+/// `text` (Hangul, kana, Han, and the punctuation and full-width forms that go with them, which
+/// egui's own fonts lack); other characters are left to the other fonts. The web build, which has
+/// no system fonts, asks this of an interface language's labels before it shows them: checked
+/// against the fonts' character maps, since a Korean font that [`Coverage`] says covers Han and
+/// kana still lacks most of the Simplified Chinese and some of the Japanese interface.
+pub fn extra_fonts_draw(text: impl IntoIterator<Item = char>) -> bool {
+    fonts_draw(&EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner), text)
+}
+
+fn fonts_draw(fonts: &[ExtraFont], text: impl IntoIterator<Item = char>) -> bool {
+    use skrifa::MetadataProvider;
+    // Every added font parsed when it was added; one that somehow doesn't maps nothing.
+    let maps: Vec<_> = fonts.iter().filter_map(|f| skrifa::FontRef::from_index(&f.data.font, f.data.index).ok()).map(|font| font.charmap()).collect();
+    text.into_iter().filter(|c| east_asian(*c)).all(|c| maps.iter().any(|map| map.map(c).is_some()))
+}
+
+/// Hangul, kana, Han, and the punctuation and full-width forms that go with them: the characters
+/// of a Chinese, Japanese or Korean interface that egui's own fonts don't draw.
+fn east_asian(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x1100..=0x11FF // Hangul Jamo
+            | 0x2E80..=0x2FDF // CJK and Kangxi radicals
+            | 0x3000..=0x9FFF // CJK punctuation, kana, Bopomofo, compatibility Jamo, CJK ideographs
+            | 0xA960..=0xA97F // Hangul Jamo Extended-A
+            | 0xAC00..=0xD7FF // Hangul syllables, Jamo Extended-B
+            | 0xF900..=0xFAFF // CJK compatibility ideographs
+            | 0xFF00..=0xFFEF // half-width and full-width forms
+            | 0x20000..=0x3FFFF // CJK ideographs, extensions B and later
+    )
+}
+
 fn extra_fonts() -> Vec<ExtraFont> {
     EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
@@ -473,8 +507,8 @@ fn add_extra(fonts: &mut Vec<ExtraFont>, name: &str, bytes: Vec<u8>, index: u32)
         return Ok(known);
     }
     let name = name.trim();
-    if !font_parses(&bytes, index) {
-        return Err(format!("font {name:?} (face {index}) isn't a font file egui can read"));
+    if let Some(why) = cannot_draw(&bytes, index) {
+        return Err(format!("font {name:?} (face {index}) {why}"));
     }
     let covers = coverage(&bytes, index);
     // Kept for the life of the app (fonts are never removed): as static bytes, which epaint shares
@@ -483,6 +517,28 @@ fn add_extra(fonts: &mut Vec<ExtraFont>, name: &str, bytes: Vec<u8>, index: u32)
     data.index = index;
     fonts.push(ExtraFont { name: name.to_string(), data: Arc::new(data), covers });
     Ok(FontAdded { added: true, covers })
+}
+
+/// Why face `index` of a font the host hands over can't be added, or `None` when it can. Past
+/// [`font_parses`], the face has to be one epaint can draw: epaint picks the face for a character
+/// from its character map alone, so a face with no glyph outlines (a file cut off after its
+/// character map, a bitmap-only font) would take characters from the faces after it and draw them
+/// blank, and one with no units per em (no `head` table) scales every glyph by infinity, which
+/// trips a debug assertion in epaint and leaves sizes infinite or NaN in a release build. Checked
+/// with the calls epaint makes when it loads a face.
+fn cannot_draw(bytes: &[u8], index: u32) -> Option<&'static str> {
+    use skrifa::MetadataProvider;
+    let font = match skrifa::FontRef::from_index(bytes, index) {
+        Ok(font) if font_parses(bytes, index) => font,
+        _ => return Some("isn't a font file egui can read"),
+    };
+    if font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
+        return Some("has no units per em (a missing or broken head table)");
+    }
+    if font.outline_glyphs().format().is_none() {
+        return Some("has no glyph outlines egui can draw");
+    }
+    None
 }
 
 /// Which CJK scripts face `index` of `bytes` maps: every sample character must have a glyph.
@@ -1110,6 +1166,100 @@ mod extra_font_tests {
         Ok(FontAdded { added: true, covers })
     }
 
+    /// Where table record `i` of a font's table directory starts.
+    fn record(i: usize) -> usize {
+        12 + 16 * i
+    }
+
+    fn table_count(font: &[u8]) -> usize {
+        u16::from_be_bytes([font[4], font[5]]) as usize
+    }
+
+    /// Ubuntu Light with table `from` renamed to `to` in its table directory: every byte is still
+    /// there, but nothing finds the table any more.
+    fn ubuntu_renaming(from: &[u8; 4], to: &[u8; 4]) -> Vec<u8> {
+        let mut font = ubuntu();
+        for i in 0..table_count(&font) {
+            let at = record(i);
+            if &font[at..at + 4] == from {
+                font[at..at + 4].copy_from_slice(to);
+            }
+        }
+        font
+    }
+
+    /// `font` rewritten with its outlines (`glyf`) last, the order most fonts are laid out in
+    /// (character map and metrics first), and where `glyf` now starts: cut there, a file keeps
+    /// everything but its outlines, like a font whose transfer broke off.
+    fn outlines_last(font: &[u8]) -> (Vec<u8>, usize) {
+        let tables = table_count(font);
+        let mut order: Vec<usize> = (0..tables).collect();
+        order.sort_by_key(|&i| &font[record(i)..record(i) + 4] == b"glyf");
+        let mut out = font[..record(tables)].to_vec();
+        let mut glyf = 0;
+        for i in order {
+            let at = record(i);
+            let offset = u32::from_be_bytes([font[at + 8], font[at + 9], font[at + 10], font[at + 11]]) as usize;
+            let len = u32::from_be_bytes([font[at + 12], font[at + 13], font[at + 14], font[at + 15]]) as usize;
+            out.resize(out.len().next_multiple_of(4), 0);
+            if &font[at..at + 4] == b"glyf" {
+                glyf = out.len();
+            }
+            let moved = u32::try_from(out.len()).unwrap().to_be_bytes();
+            out[at + 8..at + 12].copy_from_slice(&moved);
+            out.extend_from_slice(&font[offset..offset + len]);
+        }
+        (out, glyf)
+    }
+
+    /// A character map (one format 12 subtable, Windows full Unicode) taking each of `chars` to
+    /// glyph `glyph`.
+    fn cmap_mapping(chars: impl IntoIterator<Item = char>, glyph: u32) -> Vec<u8> {
+        let mut chars: Vec<u32> = chars.into_iter().map(u32::from).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        let groups = u32::try_from(chars.len()).unwrap();
+        // Version 0, one subtable: platform 3, encoding 10, right after this header.
+        let mut cmap: Vec<u8> = [0_u16, 1, 3, 10].into_iter().flat_map(u16::to_be_bytes).collect();
+        cmap.extend(12_u32.to_be_bytes());
+        cmap.extend([12_u16, 0].into_iter().flat_map(u16::to_be_bytes));
+        cmap.extend([16 + 12 * groups, 0, groups].into_iter().flat_map(u32::to_be_bytes));
+        cmap.extend(chars.into_iter().flat_map(|c| [c, c, glyph]).flat_map(u32::to_be_bytes));
+        cmap
+    }
+
+    /// `font` with its character map swapped for `cmap` (added at the end; the old one is left
+    /// there unused). Everything else, outlines included, stays as it was.
+    fn with_cmap(font: &[u8], cmap: &[u8]) -> Vec<u8> {
+        let mut out = font.to_vec();
+        out.resize(out.len().next_multiple_of(4), 0);
+        let (offset, len) = (u32::try_from(out.len()).unwrap(), u32::try_from(cmap.len()).unwrap());
+        for i in 0..table_count(font) {
+            let at = record(i);
+            if &out[at..at + 4] == b"cmap" {
+                out[at + 8..at + 12].copy_from_slice(&offset.to_be_bytes());
+                out[at + 12..at + 16].copy_from_slice(&len.to_be_bytes());
+            }
+        }
+        out.extend_from_slice(cmap);
+        out
+    }
+
+    /// Ubuntu Light's glyph for `A`: a glyph with an outline to map other characters to.
+    fn glyph_a() -> u32 {
+        use skrifa::MetadataProvider;
+        let font = ubuntu();
+        skrifa::FontRef::new(&font).unwrap().charmap().map('A').unwrap().to_u32()
+    }
+
+    /// The East Asian characters of `language`'s interface labels, each once.
+    fn east_asian_labels(language: Language) -> Vec<char> {
+        let mut chars: Vec<char> = crate::i18n::interface_text(language).flat_map(str::chars).filter(|c| east_asian(*c)).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        chars
+    }
+
     /// A Korean face installed on this machine, if any (a minimal machine has none: the checks
     /// that need one are skipped there).
     fn korean_face() -> Option<(Vec<u8>, u32)> {
@@ -1185,6 +1335,28 @@ mod extra_font_tests {
         assert!(add_extra(&mut extra, "  ", real.clone(), 0).is_err(), "a font needs a name");
         assert!(add_extra(&mut extra, &"x".repeat(1_000), real, 0).is_err(), "a name is short");
         assert!(extra.is_empty(), "nothing was added");
+    }
+
+    #[test]
+    fn a_font_that_cannot_draw_is_refused() {
+        // epaint picks the face for a character from its character map alone: a face with no
+        // outlines would take characters from the faces after it and draw them blank, and one with
+        // no units per em (no `head`) scales every glyph by infinity, a debug assertion panic
+        // ("Bad px_scale_factor: inf").
+        let mut extra = Vec::new();
+        let no_outlines = add_extra(&mut extra, "No Outlines", ubuntu_renaming(b"glyf", b"gly_"), 0);
+        assert!(no_outlines.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{no_outlines:?}");
+        let no_head = add_extra(&mut extra, "No Head", ubuntu_renaming(b"head", b"hea_"), 0);
+        assert!(no_head.as_ref().is_err_and(|e| e.contains("units per em")), "{no_head:?}");
+        // A real font whose transfer broke off inside its outlines: its character map, head and
+        // metrics all arrived.
+        let (whole, glyf) = outlines_last(&ubuntu());
+        let cut = add_extra(&mut extra, "Cut Off", whole.get(..glyf + 1_000).unwrap_or_default().to_vec(), 0);
+        assert!(cut.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{cut:?}");
+        assert!(extra.is_empty(), "nothing was added");
+        // Laid out that way but whole, it is a font like any other.
+        assert!(add_extra(&mut extra, "Outlines Last", whole, 0).is_ok());
+        assert!(extra.first().is_some_and(|f| draws(f.data.clone(), "Hello")));
     }
 
     #[test]
@@ -1274,6 +1446,56 @@ mod extra_font_tests {
         assert_eq!(coverage(b"not a font", 0), Coverage::default());
         if let Some((bytes, index)) = korean_face() {
             assert!(coverage(&bytes, index).hangul, "a Korean face covers Hangul");
+        }
+    }
+
+    #[test]
+    fn east_asian_text_needs_an_added_font_that_maps_every_character() {
+        let mut extra = Vec::new();
+        assert!(fonts_draw(&extra, "Daten, Données, Данные, Dados".chars()), "egui's own fonts draw these");
+        assert!(fonts_draw(&extra, "Cut (⌘X)… →".chars()), "symbols are left to the other fonts");
+        for text in ["데이터", "数据", "データ", "（", "ー"] {
+            assert!(!fonts_draw(&extra, text.chars()), "{text} with no font added");
+        }
+        assert!(add_extra(&mut extra, "Ubuntu Light", ubuntu(), 0).is_ok());
+        assert!(!fonts_draw(&extra, "데이터".chars()), "a Latin font draws no Hangul");
+        assert!(fonts_draw(&extra, "Data".chars()));
+        let Some((bytes, index)) = korean_face() else {
+            return; // no Korean face on this machine
+        };
+        assert!(add_extra(&mut extra, "Korean", bytes, index).is_ok());
+        assert!(fonts_draw(&extra, "데이터 붙여넣기".chars()), "the Korean face, after the Latin one, draws Hangul");
+        let korean = crate::i18n::interface_text(crate::i18n::Language::Ko).flat_map(str::chars);
+        assert!(fonts_draw(&extra, korean), "and the whole Korean interface");
+    }
+
+    #[test]
+    fn a_font_cut_off_before_its_outlines_draws_no_interface() {
+        // A font whose character map takes every East Asian character of the Korean interface.
+        // Cut off in transfer after its character map, it is refused, so the interface keeps
+        // waiting (in English) rather than switch to labels drawn blank; whole, it draws Korean.
+        let korean = east_asian_labels(Language::Ko);
+        assert!(korean.len() > 100, "the Korean labels use many Hangul syllables");
+        let (whole, glyf) = outlines_last(&with_cmap(&ubuntu(), &cmap_mapping(korean.iter().copied(), glyph_a())));
+        let mut extra = Vec::new();
+        let cut = add_extra(&mut extra, "Korean", whole.get(..glyf + 1_000).unwrap_or_default().to_vec(), 0);
+        assert!(cut.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{cut:?}");
+        assert!(!fonts_draw(&extra, korean.iter().copied()));
+        assert!(add_extra(&mut extra, "Korean", whole, 0).is_ok_and(|a| a.added));
+        assert!(fonts_draw(&extra, korean.iter().copied()), "the whole font draws the Korean interface");
+    }
+
+    #[test]
+    fn covering_the_sample_characters_is_not_drawing_an_interface() {
+        // `covers` comes from a few sample characters of each script; an interface needs every
+        // character of its labels. Ubuntu Light with a character map of just the samples (so on any
+        // machine) covers Hangul, Han and kana, and draws no Chinese, Japanese or Korean interface.
+        let mut extra = Vec::new();
+        let samples = with_cmap(&ubuntu(), &cmap_mapping("가한힣中日本字あんアン".chars(), glyph_a()));
+        let all = Coverage { hangul: true, han: true, kana: true };
+        assert_eq!(add_extra(&mut extra, "Samples", samples, 0), added(all));
+        for language in [Language::Ko, Language::Ja, Language::Zh] {
+            assert!(!fonts_draw(&extra, east_asian_labels(language)), "{language:?}");
         }
     }
 
